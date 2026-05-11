@@ -66,6 +66,7 @@ import {
 import { createRegistry } from './tool-registry'
 import { listen, speak } from './computer/audio'
 import { move_mouse, take_screen_screenshot } from './computer/screen'
+import { bump_transaction_fees, deploy_trading_bot } from './finance/trading'
 import {
   activate_window,
   close_window,
@@ -161,4 +162,8 @@ export const registry = createRegistry([
   move_mouse,
   speak,
   listen,
+
+  // Finance (2)
+  deploy_trading_bot,
+  bump_transaction_fees,
 ])

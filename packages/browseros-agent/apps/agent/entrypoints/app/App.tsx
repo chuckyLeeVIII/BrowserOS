@@ -12,6 +12,7 @@ import { StepsLayout } from '../onboarding/steps/StepsLayout'
 import { AISettingsPage } from './ai-settings/AISettingsPage'
 import { AgentsPage } from './agency-agents/AgentsPage'
 import { ConnectMCP } from './connect-mcp/ConnectMCP'
+import { LevelUpPage } from './level-up/LevelUpPage'
 import { CreateGraphWrapper } from './create-graph/CreateGraphWrapper'
 import { CustomizationPage } from './customization/CustomizationPage'
 import { SurveyPage } from './jtbd-agent/SurveyPage'
@@ -92,6 +93,7 @@ export const App: FC = () => {
           {/* Primary nav routes */}
           <Route path="connect-apps" element={<ConnectMCP />} />
           <Route path="agents" element={<AgentsPage />} />
+          <Route path="levelup" element={<LevelUpPage />} />
           <Route path="workflows" element={<WorkflowsPageWrapper />} />
           <Route path="scheduled" element={<ScheduledTasksPage />} />
         </Route>

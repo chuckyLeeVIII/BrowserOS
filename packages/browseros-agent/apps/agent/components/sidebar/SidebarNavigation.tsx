@@ -5,6 +5,7 @@ import {
   PlugZap,
   Settings,
   Sparkles,
+  Trophy,
   Users,
   Wand2,
 } from 'lucide-react'
@@ -44,6 +45,11 @@ const primaryNavItems: NavItem[] = [
     name: 'Agents',
     to: '/agents',
     icon: Users,
+  },
+  {
+    name: 'Level Up',
+    to: '/levelup',
+    icon: Trophy,
   },
   {
     name: 'Skills',
