@@ -5,6 +5,8 @@ import {
   PlugZap,
   Settings,
   Sparkles,
+  Trophy,
+  Users,
   Wand2,
 } from 'lucide-react'
 import type { FC } from 'react'
@@ -39,6 +41,16 @@ const primaryNavItems: NavItem[] = [
     feature: Feature.MANAGED_MCP_SUPPORT,
   },
   { name: 'Scheduled Tasks', to: '/scheduled', icon: CalendarClock },
+  {
+    name: 'Agents',
+    to: '/agents',
+    icon: Users,
+  },
+  {
+    name: 'Level Up',
+    to: '/levelup',
+    icon: Trophy,
+  },
   {
     name: 'Skills',
     to: '/home/skills',

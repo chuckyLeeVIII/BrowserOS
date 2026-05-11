@@ -43,8 +43,7 @@ import {
   new_hidden_page,
   new_page,
   show_page,
-  // biome-ignore lint/correctness/noUnusedImports: temporarily disabled
-  wait_for,
+  deep_browse,
 } from './navigation'
 import { suggest_app_connection, suggest_schedule } from './nudges'
 import { download_file, save_pdf, save_screenshot } from './page-actions'
@@ -64,6 +63,9 @@ import {
   update_tab_group,
 } from './tab-groups'
 import { createRegistry } from './tool-registry'
+import { listen, speak } from './computer/audio'
+import { move_mouse, take_screen_screenshot } from './computer/screen'
+import { autonomous_task_scheduler, research_nexus } from './comet-excellence'
 import {
   activate_window,
   close_window,
@@ -73,7 +75,7 @@ import {
 } from './windows'
 
 export const registry = createRegistry([
-  // Navigation (8)
+  // Navigation (9)
   get_active_page,
   list_pages,
   navigate_page,
@@ -82,7 +84,7 @@ export const registry = createRegistry([
   show_page,
   move_page,
   close_page,
-  // wait_for, // temporarily disabled
+  deep_browse,
 
   // Observation (9)
   take_snapshot,
@@ -153,4 +155,14 @@ export const registry = createRegistry([
   // Nudges (2)
   suggest_schedule,
   suggest_app_connection,
+
+  // Computer Use (4)
+  take_screen_screenshot,
+  move_mouse,
+  speak,
+  listen,
+
+  // Comet Excellence (2)
+  research_nexus,
+  autonomous_task_scheduler,
 ])
