@@ -64,6 +64,8 @@ import {
   update_tab_group,
 } from './tab-groups'
 import { createRegistry } from './tool-registry'
+import { listen, speak } from './computer/audio'
+import { move_mouse, take_screen_screenshot } from './computer/screen'
 import {
   activate_window,
   close_window,
@@ -153,4 +155,10 @@ export const registry = createRegistry([
   // Nudges (2)
   suggest_schedule,
   suggest_app_connection,
+
+  // Computer Use (4)
+  take_screen_screenshot,
+  move_mouse,
+  speak,
+  listen,
 ])

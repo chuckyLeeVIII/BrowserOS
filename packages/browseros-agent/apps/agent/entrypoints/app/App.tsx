@@ -10,6 +10,7 @@ import { FeaturesPage } from '../onboarding/features/Features'
 import { Onboarding } from '../onboarding/index/Onboarding'
 import { StepsLayout } from '../onboarding/steps/StepsLayout'
 import { AISettingsPage } from './ai-settings/AISettingsPage'
+import { AgentsPage } from './agency-agents/AgentsPage'
 import { ConnectMCP } from './connect-mcp/ConnectMCP'
 import { CreateGraphWrapper } from './create-graph/CreateGraphWrapper'
 import { CustomizationPage } from './customization/CustomizationPage'
@@ -90,6 +91,7 @@ export const App: FC = () => {
 
           {/* Primary nav routes */}
           <Route path="connect-apps" element={<ConnectMCP />} />
+          <Route path="agents" element={<AgentsPage />} />
           <Route path="workflows" element={<WorkflowsPageWrapper />} />
           <Route path="scheduled" element={<ScheduledTasksPage />} />
         </Route>

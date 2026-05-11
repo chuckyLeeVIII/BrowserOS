@@ -10,6 +10,7 @@ import {
   RotateCw,
   Split,
   Square,
+  UserPlus,
 } from 'lucide-react'
 import type React from 'react'
 import { memo } from 'react'
@@ -69,6 +70,11 @@ const nodeConfig: Record<
     icon: GitMerge,
     label: 'Join',
   },
+  agent: {
+    color: 'text-orange-600 dark:text-orange-400',
+    icon: UserPlus,
+    label: 'Agent',
+  },
 }
 
 export type NodeType =
@@ -82,6 +88,7 @@ export type NodeType =
   | 'loop'
   | 'fork'
   | 'join'
+  | 'agent'
 
 type CustomNodeData = Node<{
   type: NodeType

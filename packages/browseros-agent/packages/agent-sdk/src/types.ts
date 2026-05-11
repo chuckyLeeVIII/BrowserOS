@@ -166,3 +166,23 @@ export interface VerifyResult {
   /** Explanation of why verification passed or failed */
   reason: string
 }
+
+/**
+ * Options for the `delegate()` method.
+ */
+export interface DelegateOptions {
+  /** Custom system prompt for the sub-agent */
+  systemPrompt?: string
+  /** Conversation ID to reuse or create */
+  conversationId?: string
+}
+
+/**
+ * Result returned by `delegate()`.
+ */
+export interface DelegateResult {
+  /** Whether the delegation succeeded */
+  success: boolean
+  /** Summary message from the sub-agent */
+  message: string
+}
