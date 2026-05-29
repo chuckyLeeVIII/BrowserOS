@@ -60,12 +60,4 @@ export const OAUTH_MCP_SERVERS: OAuthMcpServer[] = [
   { name: 'Google Forms', description: 'Create and manage forms and surveys' },
   { name: 'Zendesk', description: 'Manage support tickets and customers' },
   { name: 'Intercom', description: 'Manage customer messaging and support' },
-  { name: 'Apollo', description: 'Find and contact sales prospects' },
-  { name: 'Clay', description: 'Scale personalized outreach with AI' },
-  { name: 'Readwise', description: 'Sync and manage your highlights' },
-  { name: 'Instapaper', description: 'Save and read articles later' },
-  { name: 'Trello', description: 'Manage cards, lists, and boards' },
-  { name: 'Zoom', description: 'Manage meetings and recordings' },
-  { name: 'Typeform', description: 'Create and manage interactive forms' },
-  { name: 'Ghost', description: 'Manage professional publishing and blogs' },
 ]

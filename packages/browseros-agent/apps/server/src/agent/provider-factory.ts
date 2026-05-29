@@ -214,13 +214,6 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProFactory,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotFactory,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeFactory,
-  [LLM_PROVIDERS.HERMES]: (config: ResolvedAgentConfig) => (modelId: string) => {
-    return createOpenAICompatible({
-      name: 'hermes',
-      baseURL: config.baseUrl || 'https://api.hermes-ai.com/v1',
-      ...(config.apiKey && { apiKey: config.apiKey }),
-    })
-  },
 }
 
 export function createLanguageModel(

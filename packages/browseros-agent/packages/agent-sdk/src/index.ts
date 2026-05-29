@@ -25,6 +25,4 @@ export type {
   UIMessageStreamEvent,
   VerifyOptions,
   VerifyResult,
-  DelegateOptions,
-  DelegateResult,
 } from './types'

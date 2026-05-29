@@ -1,6 +1,5 @@
 import type { AgentContext } from './context'
 import { act } from './methods/act'
-import { delegate } from './methods/delegate'
 import { extract } from './methods/extract'
 import { nav } from './methods/nav'
 import { verify } from './methods/verify'
@@ -9,8 +8,6 @@ import type {
   ActResult,
   AgentOptions,
   BrowserContext,
-  DelegateOptions,
-  DelegateResult,
   ExtractOptions,
   ExtractResult,
   LLMConfig,
@@ -193,24 +190,5 @@ export class Agent implements AsyncDisposable, AgentContext {
    */
   verify(expectation: string, options?: VerifyOptions): Promise<VerifyResult> {
     return verify(this, expectation, options)
-  }
-
-  /**
-   * Delegate a complex task to a sub-agent.
-   *
-   * @param instruction - Natural language description of the task for the sub-agent
-   * @param options - Optional delegation settings
-   * @returns Promise resolving to `{ success: boolean, message: string }`
-   *
-   * @example
-   * ```typescript
-   * const { message } = await agent.delegate('research the latest news about AI')
-   * ```
-   */
-  delegate(
-    instruction: string,
-    options?: DelegateOptions,
-  ): Promise<DelegateResult> {
-    return delegate(this, instruction, options)
   }
 }
