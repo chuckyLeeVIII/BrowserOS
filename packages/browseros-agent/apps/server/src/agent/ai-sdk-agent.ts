@@ -28,7 +28,6 @@ import type { ToolRegistry } from '../tools/tool-registry'
 import { CHAT_MODE_ALLOWED_TOOLS } from './chat-mode'
 import { createCompactionPrepareStep, type StepWithUsage } from './compaction'
 import { createContextOverflowMiddleware } from './context-overflow-middleware'
-import { createRecurrentThinkingMiddleware } from './recurrent-thinking'
 import { buildMcpServerSpecs, createMcpClients } from './mcp-builder'
 import {
   getMessageNormalizationOptions,
@@ -82,12 +81,6 @@ export class AiSdkAgent {
       model = wrapLanguageModel({
         model: rawModel as LanguageModelV3,
         middleware: createContextOverflowMiddleware(contextWindow),
-      })
-
-      // Apply Recurrent Thinking (Open Mythos / RDT)
-      model = wrapLanguageModel({
-        model: model as LanguageModelV3,
-        middleware: createRecurrentThinkingMiddleware(4),
       })
 
       // Optionally add AI SDK DevTools tracing (dev-only)
