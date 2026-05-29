@@ -14,15 +14,16 @@ import {
 import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
 import type { Browser } from '../../browser/browser'
-import type { KlavisClient } from '../../lib/clients/klavis/klavis-client'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
 import type { ToolRegistry } from '../../tools/tool-registry'
+import type { KlavisProxyRef } from '../services/klavis/strata-proxy'
 import type { BrowserContext, ChatRequest } from '../types'
+import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
 
 export interface ChatServiceDeps {
   sessionStore: SessionStore
-  klavisClient: KlavisClient
+  klavisRef?: KlavisProxyRef
   browser: Browser
   registry: ToolRegistry
   browserosId?: string
@@ -70,7 +71,7 @@ export class ChatService {
     let isNewSession = false
     const contextChanges: string[] = []
 
-    // Build a stable key from enabled MCP servers for change detection
+    // Build stable keys for change detection
     const mcpServerKey = this.buildMcpServerKey(request.browserContext)
 
     // Detect MCP config change mid-conversation → rebuild session
@@ -88,10 +89,16 @@ export class ChatService {
         mcpServerKey,
       )
 
+      const oldParts = (previousMcpKey ?? '').split(',').filter(Boolean)
+      const newParts = mcpServerKey.split(',').filter(Boolean)
+      const oldKlavisState = oldParts.find((s) => s.startsWith('klavis:'))
+      const newKlavisState = newParts.find((s) => s.startsWith('klavis:'))
       const oldServers = new Set(
-        (previousMcpKey ?? '').split(',').filter(Boolean),
+        oldParts.filter((s) => !s.startsWith('klavis:')),
       )
-      const newServers = new Set(mcpServerKey.split(',').filter(Boolean))
+      const newServers = new Set(
+        newParts.filter((s) => !s.startsWith('klavis:')),
+      )
       const added = [...newServers].filter((s) => !oldServers.has(s))
       const removed = [...oldServers].filter((s) => !newServers.has(s))
 
@@ -107,9 +114,19 @@ export class ChatService {
         )
       }
       if (parts.length === 0) {
-        parts.push(
-          'Connected app integrations changed during this conversation. Use only tools that are currently registered.',
-        )
+        if (
+          oldKlavisState === 'klavis:pending' &&
+          newKlavisState === 'klavis:connected' &&
+          newServers.size > 0
+        ) {
+          parts.push(
+            `Klavis app integration tools are now available for the following connected apps: ${[...newServers].join(', ')}.`,
+          )
+        } else {
+          parts.push(
+            'Connected app integrations changed during this conversation. Use only tools that are currently registered.',
+          )
+        }
       }
       contextChanges.push(parts.join(' '))
     }
@@ -147,7 +164,10 @@ export class ChatService {
     if (!session) {
       isNewSession = true
       let hiddenPageId: number | undefined
-      let browserContext = await this.resolvePageIds(request.browserContext)
+      let browserContext = await resolveBrowserContextPageIds(
+        this.deps.browser,
+        request.browserContext,
+      )
       if (request.isScheduledTask) {
         try {
           hiddenPageId = await this.deps.browser.newPage('about:blank', {
@@ -199,7 +219,7 @@ export class ChatService {
         browser: this.deps.browser,
         registry: this.deps.registry,
         browserContext,
-        klavisClient: this.deps.klavisClient,
+        klavisRef: this.deps.klavisRef,
         browserosId: this.deps.browserosId,
         aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
       })
@@ -232,11 +252,11 @@ export class ChatService {
       ? (session.browserContext ?? request.browserContext)
       : request.browserContext
     // Scheduled tasks already have correct internal pageIds from browser.newPage();
-    // calling resolvePageIds would pass those to resolveTabIds (which expects Chrome
-    // tab IDs), corrupting them back to undefined.
+    // resolving them again would pass those to resolveTabIds, which expects Chrome
+    // tab IDs.
     const resolvedMessageContext = request.isScheduledTask
       ? messageContext
-      : await this.resolvePageIds(messageContext)
+      : await resolveBrowserContextPageIds(this.deps.browser, messageContext)
     const userContent = formatUserMessage(
       request.message,
       resolvedMessageContext,
@@ -249,17 +269,49 @@ export class ChatService {
       contextChanges.length > 0
         ? `${contextChanges.map((c) => `[Context: ${c}]`).join('\n')}\n\n`
         : ''
-    session.agent.appendUserMessage(contextPrefix + userContent)
+
+    // Persist the *raw* user text in session.agent.messages so it
+    // round-trips clean to the client's useChat state and to any
+    // future history reload. The wrapped form (browser context +
+    // <selected_text> + <USER_QUERY>) is built as a transient prompt
+    // copy below — the LLM sees it, the user-visible state never
+    // does.
+    session.agent.appendUserMessage(request.message)
+    const promptUserText = contextPrefix + userContent
+    const wrappedUserMessageId =
+      session.agent.messages[session.agent.messages.length - 1]?.id
+
+    const promptUiMessages = filterValidMessages(session.agent.messages).map(
+      (msg) =>
+        msg.id === wrappedUserMessageId && msg.role === 'user'
+          ? {
+              ...msg,
+              parts: [{ type: 'text' as const, text: promptUserText }],
+            }
+          : msg,
+    )
 
     return createAgentUIStreamResponse({
       agent: session.agent.toolLoopAgent,
-      uiMessages: filterValidMessages(session.agent.messages),
+      uiMessages: promptUiMessages,
       abortSignal,
       onFinish: async ({ messages }: { messages: UIMessage[] }) => {
-        session.agent.messages = filterValidMessages(messages)
+        // The agent loop returns `messages` containing the prompt-
+        // wrapped user text. Restore the raw form before persisting
+        // so subsequent turns see the clean text and the client's
+        // local UIMessage matches what was originally typed.
+        const restored = messages.map((msg) =>
+          msg.id === wrappedUserMessageId && msg.role === 'user'
+            ? {
+                ...msg,
+                parts: [{ type: 'text' as const, text: request.message }],
+              }
+            : msg,
+        )
+        session.agent.messages = filterValidMessages(restored)
         logger.info('Agent execution complete', {
           conversationId: request.conversationId,
-          totalMessages: messages.length,
+          totalMessages: restored.length,
         })
 
         if (session?.hiddenPageId) {
@@ -284,48 +336,6 @@ export class ChatService {
     return { deleted, sessionCount: this.deps.sessionStore.count() }
   }
 
-  // Browser context arrives with Chrome tab IDs, but tools expect internal page IDs.
-  // Resolve the mapping upfront so the agent's first navigation doesn't fail.
-  private async resolvePageIds(
-    browserContext?: BrowserContext,
-  ): Promise<BrowserContext | undefined> {
-    if (!browserContext) return undefined
-
-    const tabIdSet = new Set<number>()
-    if (browserContext.activeTab) tabIdSet.add(browserContext.activeTab.id)
-    if (browserContext.selectedTabs) {
-      for (const tab of browserContext.selectedTabs) tabIdSet.add(tab.id)
-    }
-    if (browserContext.tabs) {
-      for (const tab of browserContext.tabs) tabIdSet.add(tab.id)
-    }
-
-    if (tabIdSet.size === 0) return browserContext
-
-    const tabToPage = await this.deps.browser.resolveTabIds([...tabIdSet])
-
-    const addPageId = (tab: { id: number; url?: string; title?: string }) => {
-      const pageId = tabToPage.get(tab.id)
-      if (pageId === undefined) {
-        logger.warn('Could not resolve page ID for tab', { tabId: tab.id })
-      }
-      return { ...tab, pageId }
-    }
-
-    logger.debug('Resolved tab IDs to page IDs', {
-      mapping: Object.fromEntries(tabToPage),
-    })
-
-    return {
-      ...browserContext,
-      activeTab: browserContext.activeTab
-        ? addPageId(browserContext.activeTab)
-        : undefined,
-      selectedTabs: browserContext.selectedTabs?.map(addPageId),
-      tabs: browserContext.tabs?.map(addPageId),
-    }
-  }
-
   private closeHiddenPage(pageId: number, conversationId: string): void {
     this.deps.browser.closePage(pageId).catch((error) => {
       logger.warn('Failed to close hidden page', {
@@ -348,14 +358,20 @@ export class ChatService {
 
     const browserContext = agentConfig.isScheduledTask
       ? (session.browserContext ??
-        (await this.resolvePageIds(request.browserContext)))
-      : await this.resolvePageIds(request.browserContext)
+        (await resolveBrowserContextPageIds(
+          this.deps.browser,
+          request.browserContext,
+        )))
+      : await resolveBrowserContextPageIds(
+          this.deps.browser,
+          request.browserContext,
+        )
     const agent = await AiSdkAgent.create({
       resolvedConfig: agentConfig,
       browser: this.deps.browser,
       registry: this.deps.registry,
       browserContext,
-      klavisClient: this.deps.klavisClient,
+      klavisRef: this.deps.klavisRef,
       browserosId: this.deps.browserosId,
       aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
     })
@@ -378,6 +394,12 @@ export class ChatService {
     const managed = browserContext?.enabledMcpServers?.slice().sort() ?? []
     const custom =
       browserContext?.customMcpServers?.map((s) => s.url).sort() ?? []
-    return [...managed, ...custom].join(',')
+    const klavisState =
+      managed.length > 0
+        ? this.deps.klavisRef?.handle
+          ? 'klavis:connected'
+          : 'klavis:pending'
+        : null
+    return [klavisState, ...managed, ...custom].filter(Boolean).join(',')
   }
 }

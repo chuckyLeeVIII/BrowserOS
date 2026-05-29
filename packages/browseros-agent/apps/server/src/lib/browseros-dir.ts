@@ -7,35 +7,70 @@ import type { ServerDiscoveryConfig } from '@browseros/shared/types/server-confi
 import { logger } from './logger'
 
 export function getBrowserosDir(): string {
-  return join(homedir(), PATHS.BROWSEROS_DIR_NAME)
+  const override = process.env.BROWSEROS_DIR?.trim()
+  if (override) {
+    return override
+  }
+  const dirName =
+    process.env.NODE_ENV === 'development'
+      ? PATHS.DEV_BROWSEROS_DIR_NAME
+      : PATHS.BROWSEROS_DIR_NAME
+  return join(homedir(), dirName)
 }
 
-export function getMemoryDir(): string {
-  return join(getBrowserosDir(), PATHS.MEMORY_DIR_NAME)
+export function logDevelopmentBrowserosDir(): void {
+  if (process.env.NODE_ENV !== 'development') return
+  logger.info(`Using development BrowserOS directory: ${getBrowserosDir()}`)
 }
 
 export function getSessionsDir(): string {
   return join(getBrowserosDir(), PATHS.SESSIONS_DIR_NAME)
 }
 
-export function getSoulPath(): string {
-  return join(getBrowserosDir(), PATHS.SOUL_FILE_NAME)
+export function getCacheDir(): string {
+  return join(getBrowserosDir(), PATHS.CACHE_DIR_NAME)
 }
 
-export function getCoreMemoryPath(): string {
-  return join(getMemoryDir(), PATHS.CORE_MEMORY_FILE_NAME)
+/** Returns the durable SQLite database path for local BrowserOS server state. */
+export function getDbPath(): string {
+  return join(getBrowserosDir(), PATHS.DB_DIR_NAME, PATHS.DB_FILE_NAME)
 }
 
-export function getSkillsDir(): string {
-  return join(getBrowserosDir(), PATHS.SKILLS_DIR_NAME)
+export function getVmCacheDir(): string {
+  return join(getCacheDir(), 'vm')
 }
 
-export function getBuiltinSkillsDir(): string {
-  return join(getSkillsDir(), PATHS.BUILTIN_DIR_NAME)
+export function getLimaHomeDir(): string {
+  return join(getBrowserosDir(), 'lima')
+}
+
+export function getVmStateDir(): string {
+  return join(getBrowserosDir(), 'vm')
+}
+
+export function getVmDisksDir(): string {
+  return getVmCacheDir()
+}
+
+export function getLazyMonitoringDir(): string {
+  return join(getBrowserosDir(), 'lazy-monitoring')
+}
+
+export function getLazyMonitoringRunsDir(): string {
+  return join(getLazyMonitoringDir(), 'runs')
+}
+
+export function getLazyMonitoringRunDir(runId: string): string {
+  return join(getLazyMonitoringRunsDir(), runId)
 }
 
 export function getServerConfigPath(): string {
   return join(getBrowserosDir(), PATHS.SERVER_CONFIG_FILE_NAME)
+}
+
+/** Returns the user-managed SOUL.md path used as passive agent prompt context. */
+export function getSoulPath(): string {
+  return join(getBrowserosDir(), PATHS.SOUL_FILE_NAME)
 }
 
 export async function writeServerConfig(
@@ -53,10 +88,10 @@ export function removeServerConfigSync(): void {
 }
 
 export async function ensureBrowserosDir(): Promise<void> {
-  await mkdir(getMemoryDir(), { recursive: true })
-  await mkdir(getSkillsDir(), { recursive: true })
-  await mkdir(getBuiltinSkillsDir(), { recursive: true })
+  logDevelopmentBrowserosDir()
   await mkdir(getSessionsDir(), { recursive: true })
+  await mkdir(getLazyMonitoringRunsDir(), { recursive: true })
+  await mkdir(getVmDisksDir(), { recursive: true })
 }
 
 export async function cleanOldSessions(): Promise<void> {

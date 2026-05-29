@@ -15,19 +15,18 @@ import {
   type UIMessage,
   wrapLanguageModel,
 } from 'ai'
+import {
+  buildKlavisToolSet,
+  type KlavisProxyRef,
+} from '../api/services/klavis/strata-proxy'
 import type { Browser } from '../browser/browser'
-import type { KlavisClient } from '../lib/clients/klavis/klavis-client'
 import { logger } from '../lib/logger'
 import { metrics } from '../lib/metrics'
-import { isSoulBootstrap, readSoul } from '../lib/soul'
-import { buildSkillsCatalog } from '../skills/catalog'
-import { loadSkills } from '../skills/loader'
 import { buildFilesystemToolSet } from '../tools/filesystem/build-toolset'
-import { buildMemoryToolSet } from '../tools/memory/build-toolset'
+import type { ToolContext } from '../tools/framework'
 import type { ToolRegistry } from '../tools/tool-registry'
 import { CHAT_MODE_ALLOWED_TOOLS } from './chat-mode'
 import { createCompactionPrepareStep, type StepWithUsage } from './compaction'
-import { createContextOverflowMiddleware } from './context-overflow-middleware'
 import { buildMcpServerSpecs, createMcpClients } from './mcp-builder'
 import {
   getMessageNormalizationOptions,
@@ -35,6 +34,7 @@ import {
 } from './message-normalization'
 import { buildSystemPrompt } from './prompt'
 import { createLanguageModel } from './provider-factory'
+import { readSoulPrompt } from './soul-prompt'
 import { buildBrowserToolSet } from './tool-adapter'
 import type { ResolvedAgentConfig } from './types'
 
@@ -43,7 +43,7 @@ export interface AiSdkAgentConfig {
   browser: Browser
   registry: ToolRegistry
   browserContext?: BrowserContext
-  klavisClient?: KlavisClient
+  klavisRef?: KlavisProxyRef
   browserosId?: string
   aiSdkDevtoolsEnabled?: boolean
 }
@@ -67,7 +67,6 @@ export class AiSdkAgent {
       config.resolvedConfig.contextWindowSize ??
       AGENT_LIMITS.DEFAULT_CONTEXT_WINDOW
 
-    // Build language model with middleware stack
     const rawModel = createLanguageModel(config.resolvedConfig)
     const isV3Model =
       typeof rawModel === 'object' &&
@@ -76,38 +75,29 @@ export class AiSdkAgent {
       rawModel.specificationVersion === 'v3'
 
     let model = rawModel
-    if (isV3Model) {
-      // Always apply context overflow protection
+    if (isV3Model && config.aiSdkDevtoolsEnabled) {
       model = wrapLanguageModel({
         model: rawModel as LanguageModelV3,
-        middleware: createContextOverflowMiddleware(contextWindow),
+        middleware: devToolsMiddleware() as LanguageModelV3Middleware,
       })
-
-      // Optionally add AI SDK DevTools tracing (dev-only)
-      if (config.aiSdkDevtoolsEnabled) {
-        model = wrapLanguageModel({
-          model: model as LanguageModelV3,
-          middleware: devToolsMiddleware() as LanguageModelV3Middleware,
-        })
-        logger.info('AI SDK DevTools middleware enabled', {
-          conversationId: config.resolvedConfig.conversationId,
-          provider: config.resolvedConfig.provider,
-          model: config.resolvedConfig.model,
-        })
-      }
+      logger.info('AI SDK DevTools middleware enabled', {
+        conversationId: config.resolvedConfig.conversationId,
+        provider: config.resolvedConfig.provider,
+        model: config.resolvedConfig.model,
+      })
     }
 
     // Build browser tools from the unified tool registry
     const originPageId = config.browserContext?.activeTab?.pageId
-    const allBrowserTools = buildBrowserToolSet(
-      config.registry,
-      config.browser,
-      config.resolvedConfig.workingDir,
-      {
+    const toolContext: ToolContext = {
+      browser: config.browser,
+      directories: { workingDir: config.resolvedConfig.workingDir },
+      session: {
         origin: config.resolvedConfig.origin,
         originPageId,
       },
-    )
+    }
+    const allBrowserTools = buildBrowserToolSet(config.registry, toolContext)
     const browserTools = config.resolvedConfig.chatMode
       ? Object.fromEntries(
           Object.entries(allBrowserTools).filter(([name]) =>
@@ -121,14 +111,28 @@ export class AiSdkAgent {
       })
     }
 
-    // Build external MCP server specs (Klavis, custom) and connect clients
+    // Get Klavis tools from shared background handle (no per-session connection).
+    // Only expose when user has enabled servers — matches old per-session gating.
+    const klavisTools =
+      config.klavisRef?.handle &&
+      config.browserContext?.enabledMcpServers?.length
+        ? buildKlavisToolSet(config.klavisRef.handle)
+        : {}
+
+    // Connect custom (non-Klavis) MCP servers per-session
     const specs = await buildMcpServerSpecs({
       browserContext: config.browserContext,
-      klavisClient: config.klavisClient,
-      browserosId: config.browserosId,
     })
-    const { clients, tools: rawExternalMcpTools } =
-      await createMcpClients(specs)
+    const { clients, tools: customMcpTools } = await createMcpClients(specs)
+    const collidingToolNames = Object.keys(customMcpTools).filter(
+      (name) => name in klavisTools,
+    )
+    if (collidingToolNames.length > 0) {
+      logger.warn('Custom MCP tools override Klavis tools', {
+        toolNames: collidingToolNames,
+      })
+    }
+    const rawExternalMcpTools = { ...klavisTools, ...customMcpTools }
 
     // Wrap external MCP tools (Klavis, custom) with metrics
     const externalMcpTools: ToolSet = {}
@@ -171,14 +175,10 @@ export class AiSdkAgent {
       !config.resolvedConfig.chatMode && config.resolvedConfig.workingDir
         ? buildFilesystemToolSet(config.resolvedConfig.workingDir)
         : {}
-    const memoryTools = config.resolvedConfig.chatMode
-      ? {}
-      : buildMemoryToolSet()
     const tools = {
       ...browserTools,
       ...externalMcpTools,
       ...filesystemTools,
-      ...memoryTools,
     }
 
     if (
@@ -197,13 +197,7 @@ export class AiSdkAgent {
     ) {
       excludeSections.push('nudges')
     }
-    const soulContent = await readSoul()
-    const isBootstrap = await isSoulBootstrap()
-
-    // Load skills catalog for prompt injection
-    const skills = await loadSkills()
-    const skillsCatalog =
-      skills.length > 0 ? buildSkillsCatalog(skills) : undefined
+    const soulContent = await readSoulPrompt()
 
     const instructions = buildSystemPrompt({
       userSystemPrompt: config.resolvedConfig.userSystemPrompt,
@@ -212,11 +206,9 @@ export class AiSdkAgent {
       scheduledTaskPageId: config.browserContext?.activeTab?.pageId,
       workspaceDir: config.resolvedConfig.workingDir,
       soulContent,
-      isSoulBootstrap: isBootstrap,
       chatMode: config.resolvedConfig.chatMode,
       connectedApps: config.browserContext?.enabledMcpServers,
       declinedApps: config.resolvedConfig.declinedApps,
-      skillsCatalog,
       origin: config.resolvedConfig.origin,
     })
 

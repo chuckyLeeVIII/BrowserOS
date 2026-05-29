@@ -20,6 +20,7 @@ interface StoredSession {
 }
 
 interface StreamResponseOptions {
+  uiMessages?: MockMessage[]
   onFinish(args: { messages: MockMessage[] }): Promise<void>
 }
 
@@ -106,7 +107,7 @@ function createFakeAgent() {
     toolNames: new Set<string>(),
     messages,
     appendUserMessage(text: string) {
-      messages.push({
+      this.messages.push({
         id: 'user-1',
         role: 'user',
         parts: [{ type: 'text', text }],
@@ -120,8 +121,8 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
   it('creates and cleans up a hidden page without creating a hidden window', async () => {
     const fakeAgent = createFakeAgent()
     agentToReturn = fakeAgent
-    streamResponseHandler = async ({ onFinish }) => {
-      await onFinish({ messages: fakeAgent.messages })
+    streamResponseHandler = async ({ onFinish, uiMessages }) => {
+      await onFinish({ messages: uiMessages ?? fakeAgent.messages })
       return new Response('ok')
     }
 
@@ -141,7 +142,7 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
     const sessionStore = createSessionStore()
     const service = new ChatService({
       sessionStore: sessionStore as never,
-      klavisClient: {} as never,
+      klavisRef: { handle: null },
       browser: browser as never,
       registry: {} as never,
     })
@@ -214,7 +215,7 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
 
     const service = new ChatService({
       sessionStore: sessionStore as never,
-      klavisClient: {} as never,
+      klavisRef: { handle: null },
       browser: browser as never,
       registry: {} as never,
     })
@@ -229,8 +230,8 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
   it('keeps the scheduled hidden page context when metadata lookup fails', async () => {
     const fakeAgent = createFakeAgent()
     agentToReturn = fakeAgent
-    streamResponseHandler = async ({ onFinish }) => {
-      await onFinish({ messages: fakeAgent.messages })
+    streamResponseHandler = async ({ onFinish, uiMessages }) => {
+      await onFinish({ messages: uiMessages ?? fakeAgent.messages })
       return new Response('ok')
     }
 
@@ -245,7 +246,7 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
     const sessionStore = createSessionStore()
     const service = new ChatService({
       sessionStore: sessionStore as never,
-      klavisClient: {} as never,
+      klavisRef: { handle: null },
       browser: browser as never,
       registry: {} as never,
     })
@@ -287,5 +288,139 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
       title: 'Scheduled Task',
     })
     expect(browser.closePage).toHaveBeenCalledWith(88)
+  })
+})
+
+describe('ChatService Klavis session rebuilds', () => {
+  it('rebuilds a managed-app session when the shared Klavis handle appears', async () => {
+    const firstAgent = createFakeAgent()
+    const secondAgent = createFakeAgent()
+    agentToReturn = firstAgent
+    let lastPromptUiMessages: MockMessage[] | undefined
+    streamResponseHandler = async ({ onFinish, uiMessages }) => {
+      lastPromptUiMessages = uiMessages
+      await onFinish({ messages: uiMessages ?? [] })
+      return new Response('ok')
+    }
+
+    const klavisRef = { handle: null as object | null }
+    const browser = {
+      resolveTabIds: mock(
+        async (tabIds: number[]) =>
+          new Map(tabIds.map((tabId) => [tabId, tabId + 100])),
+      ),
+      closePage: mock(async () => {}),
+    }
+    const sessionStore = createSessionStore()
+    const service = new ChatService({
+      sessionStore: sessionStore as never,
+      klavisRef: klavisRef as never,
+      browser: browser as never,
+      registry: {} as never,
+    })
+    const createCallsBefore = createAgentSpy.mock.calls.length
+    const conversationId = crypto.randomUUID()
+    const request = {
+      conversationId,
+      message: 'check integrations',
+      isScheduledTask: false,
+      mode: 'agent',
+      origin: 'sidepanel',
+      browserContext: {
+        activeTab: {
+          id: 3,
+          url: 'https://example.com',
+          title: 'Example',
+        },
+        enabledMcpServers: ['slack'],
+      },
+    } as never
+
+    await service.processMessage(request, new AbortController().signal)
+
+    agentToReturn = secondAgent
+    klavisRef.handle = {}
+
+    await service.processMessage(
+      { ...request, message: 'check integrations again' },
+      new AbortController().signal,
+    )
+
+    expect(createAgentSpy.mock.calls.length - createCallsBefore).toBe(2)
+    expect(firstAgent.dispose).toHaveBeenCalledTimes(1)
+
+    // Persisted form stays the raw user text — TKT-774. The Klavis
+    // context-change notice and the formatted user envelope go only
+    // into the transient prompt copy fed to the LLM.
+    expect(secondAgent.messages).toHaveLength(2)
+    const persistedRebuiltMessage =
+      secondAgent.messages[1]?.parts[0]?.text ?? ''
+    expect(persistedRebuiltMessage).toBe('check integrations again')
+
+    // Prompt copy (what the agent loop actually saw) carries the
+    // context-change prefix so the model knows about the new tools.
+    const promptRebuiltMessage =
+      lastPromptUiMessages?.at(-1)?.parts[0]?.text ?? ''
+    expect(promptRebuiltMessage).toContain(
+      'Klavis app integration tools are now available for the following connected apps: slack.',
+    )
+    expect(promptRebuiltMessage).not.toContain('klavis:pending')
+    expect(promptRebuiltMessage).not.toContain('klavis:connected')
+  })
+
+  it('does not rebuild a session with no enabled managed apps when Klavis connects', async () => {
+    const firstAgent = createFakeAgent()
+    const secondAgent = createFakeAgent()
+    agentToReturn = firstAgent
+    streamResponseHandler = async ({ onFinish, uiMessages }) => {
+      await onFinish({ messages: uiMessages ?? [] })
+      return new Response('ok')
+    }
+
+    const klavisRef = { handle: null as object | null }
+    const browser = {
+      resolveTabIds: mock(
+        async (tabIds: number[]) =>
+          new Map(tabIds.map((tabId) => [tabId, tabId + 200])),
+      ),
+      closePage: mock(async () => {}),
+    }
+    const sessionStore = createSessionStore()
+    const service = new ChatService({
+      sessionStore: sessionStore as never,
+      klavisRef: klavisRef as never,
+      browser: browser as never,
+      registry: {} as never,
+    })
+    const createCallsBefore = createAgentSpy.mock.calls.length
+    const conversationId = crypto.randomUUID()
+    const request = {
+      conversationId,
+      message: 'check browser only',
+      isScheduledTask: false,
+      mode: 'agent',
+      origin: 'sidepanel',
+      browserContext: {
+        activeTab: {
+          id: 5,
+          url: 'https://example.com',
+          title: 'Example',
+        },
+      },
+    } as never
+
+    await service.processMessage(request, new AbortController().signal)
+
+    agentToReturn = secondAgent
+    klavisRef.handle = {}
+
+    await service.processMessage(
+      { ...request, message: 'check browser only again' },
+      new AbortController().signal,
+    )
+
+    expect(createAgentSpy.mock.calls.length - createCallsBefore).toBe(1)
+    expect(firstAgent.dispose).not.toHaveBeenCalled()
+    expect(firstAgent.messages).toHaveLength(2)
   })
 })

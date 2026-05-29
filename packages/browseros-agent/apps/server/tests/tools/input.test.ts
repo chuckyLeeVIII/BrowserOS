@@ -1,4 +1,4 @@
-import { describe, it } from 'bun:test'
+import { afterAll, describe, it } from 'bun:test'
 import assert from 'node:assert'
 import type { Browser } from '../../src/browser/browser'
 import { executeTool, type ToolContext } from '../../src/tools/framework'
@@ -14,7 +14,7 @@ import {
 } from '../../src/tools/input'
 import { close_page, new_page } from '../../src/tools/navigation'
 import { evaluate_script, take_snapshot } from '../../src/tools/snapshot'
-import { withBrowser } from '../__helpers__/with-browser'
+import { cleanupWithBrowser, withBrowser } from '../__helpers__/with-browser'
 
 function textOf(result: {
   content: { type: string; text?: string }[]
@@ -86,6 +86,8 @@ const FORM_PAGE = `data:text/html,${encodeURIComponent(`<!DOCTYPE html>
     });
   </script>
 </body></html>`)}`
+
+afterAll(cleanupWithBrowser)
 
 describe('input tools', () => {
   it('fill types text into an input', async () => {

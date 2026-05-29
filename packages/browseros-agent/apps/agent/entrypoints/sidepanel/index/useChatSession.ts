@@ -1,7 +1,7 @@
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport, type UIMessage } from 'ai'
 import { compact } from 'es-toolkit/array'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
@@ -25,15 +25,22 @@ import { useInvalidateCredits } from '@/lib/credits/useCredits'
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
 import { useGraphqlQuery } from '@/lib/graphql/useGraphqlQuery'
 import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
-import { useLlmProviders } from '@/lib/llm-providers/useLlmProviders'
+import type { ChatRequestBrowserContext } from '@/lib/messaging/server/buildChatRequestBody'
 import { track } from '@/lib/metrics/track'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
+import { sentry } from '@/lib/sentry/sentry'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
 import type { ChatMode } from './chatTypes'
 import { GetConversationWithMessagesDocument } from './graphql/chatSessionDocument'
+import { toLlmProviderConfig } from './sidepanel-chat-targets'
 import { useChatRefs } from './useChatRefs'
+import {
+  buildSidepanelPreparedSendMessagesRequest,
+  toProviderOption,
+} from './useChatSessionRequest'
+import { useExecutionHistoryTracker } from './useExecutionHistoryTracker'
 import { useNotifyActiveTab } from './useNotifyActiveTab'
 import { useRemoteConversationSave } from './useRemoteConversationSave'
 
@@ -44,6 +51,15 @@ const getLastMessageText = (messages: UIMessage[]) => {
     .filter((part) => part.type === 'text')
     .map((part) => part.text)
     .join('')
+}
+
+const getLastUserMessageText = (messages: UIMessage[]) => {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'user') {
+      return getLastMessageText([messages[i]])
+    }
+  }
+  return ''
 }
 
 export const getResponseAndQueryFromMessageId = (
@@ -76,18 +92,76 @@ export interface ChatSessionOptions {
   isIntegrationsSynced?: boolean
 }
 
+const NEWTAB_SYSTEM_PROMPT = `IMPORTANT: The user is chatting from the New Tab page. When performing browser actions, ALWAYS open content in a NEW TAB rather than navigating the current tab. The user's new tab page should remain accessible.`
+
+const getUserSystemPrompt = (
+  origin: ChatOrigin | undefined,
+  personalization: string,
+) =>
+  origin === 'newtab'
+    ? [personalization, NEWTAB_SYSTEM_PROMPT].filter(Boolean).join('\n\n')
+    : personalization
+
+const buildRequestBrowserContext = ({
+  activeTab,
+  action,
+  enabledMcpServers,
+  customMcpServers,
+}: {
+  activeTab?: chrome.tabs.Tab
+  action?: ChatAction
+  enabledMcpServers: Array<string | undefined>
+  customMcpServers: {
+    name: string
+    url?: string
+  }[]
+}): ChatRequestBrowserContext | undefined => {
+  const browserContext: ChatRequestBrowserContext = {}
+
+  if (activeTab) {
+    browserContext.windowId = activeTab.windowId
+    browserContext.activeTab = {
+      id: activeTab.id,
+      url: activeTab.url,
+      title: activeTab.title,
+    }
+  }
+
+  if (action?.tabs?.length) {
+    browserContext.selectedTabs = action.tabs.map((tab) => ({
+      id: tab.id,
+      url: tab.url,
+      title: tab.title,
+    }))
+  }
+
+  const managedMcpServers = compact(enabledMcpServers)
+  if (managedMcpServers.length) {
+    browserContext.enabledMcpServers = managedMcpServers
+  }
+
+  if (customMcpServers.length) {
+    browserContext.customMcpServers = customMcpServers
+  }
+
+  return Object.keys(browserContext).length ? browserContext : undefined
+}
+
 export const useChatSession = (options?: ChatSessionOptions) => {
   const {
     selectedLlmProviderRef,
+    selectedChatTargetRef,
     enabledMcpServersRef,
     enabledCustomServersRef,
     personalizationRef,
+    setDefaultProvider,
+    chatTargets,
+    selectedChatTarget,
+    selectChatTarget,
     selectedLlmProvider,
     isLoadingProviders,
   } = useChatRefs()
   const invalidateCredits = useInvalidateCredits()
-
-  const { providers: llmProviders, setDefaultProvider } = useLlmProviders()
 
   const {
     baseUrl: agentServerUrl,
@@ -111,11 +185,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     agentUrlRef.current = agentServerUrl
   }, [agentServerUrl])
 
-  const providers: Provider[] = llmProviders.map((p) => ({
-    id: p.id,
-    name: p.name,
-    type: p.type,
-  }))
+  const providers: Provider[] = chatTargets.map(toProviderOption)
 
   const [mode, setMode] = useState<ChatMode>('agent')
   const [textToAction, setTextToAction] = useState<Map<string, ChatAction>>(
@@ -129,6 +199,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   useEffect(() => {
     conversationIdRef.current = conversationId
   }, [conversationId])
+
+  const {
+    startTask: startExecutionTask,
+    syncFromMessages: syncExecutionHistory,
+    finishTask: finishExecutionTask,
+  } = useExecutionHistoryTracker()
 
   const onClickLike = (messageId: string) => {
     const { responseText, queryText } = getResponseAndQueryFromMessageId(
@@ -210,15 +286,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     textToActionRef.current = textToAction
   }, [mode, textToAction])
 
-  const selectedProvider = selectedLlmProvider
-    ? {
-        id: selectedLlmProvider.id,
-        name: selectedLlmProvider.name,
-        type:
-          selectedLlmProvider.id === 'browseros'
-            ? ('browseros' as const)
-            : selectedLlmProvider.type,
-      }
+  const selectedProvider = selectedChatTarget
+    ? toProviderOption(selectedChatTarget)
     : providers[0]
 
   const {
@@ -230,8 +299,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     error: chatError,
   } = useChat({
     transport: new DefaultChatTransport({
-      // Important: this chat logic is also used in apps/agent/lib/schedules/getChatServerResponse.ts for scheduled jobs. Make sure to keep them in sync for any future changes.
       prepareSendMessagesRequest: async ({ messages }) => {
+        const target = selectedChatTargetRef.current
+        const fallbackProvider =
+          selectedLlmProviderRef.current ?? createDefaultBrowserOSProvider()
         const activeTabsList = await chrome.tabs.query({
           active: true,
           currentWindow: true,
@@ -240,68 +311,19 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         const activeTabSelection = activeTab?.id
           ? (selectionMapRef.current[String(activeTab.id)] ?? null)
           : null
-        const message = getLastMessageText(messages)
-        const provider =
-          selectedLlmProviderRef.current ?? createDefaultBrowserOSProvider()
         const currentMode = modeRef.current
         const enabledMcpServers = enabledMcpServersRef.current
         const customMcpServers = enabledCustomServersRef.current
-
-        const getActionForMessage = (messageText: string) => {
-          return textToActionRef.current.get(messageText)
-        }
-
-        const action = getActionForMessage(message)
-
-        const browserContext: {
-          windowId?: number
-          activeTab?: {
-            id?: number
-            url?: string
-            title?: string
-          }
-          selectedTabs?: {
-            id?: number
-            url?: string
-            title?: string
-          }[]
-          enabledMcpServers?: string[]
-          customMcpServers?: {
-            name: string
-            url: string
-          }[]
-        } = {}
-
-        if (activeTab) {
-          browserContext.windowId = activeTab.windowId
-          browserContext.activeTab = {
-            id: activeTab.id,
-            url: activeTab.url,
-            title: activeTab.title,
-          }
-        }
-
-        if (action?.tabs?.length) {
-          browserContext.selectedTabs = action?.tabs?.map((tab) => ({
-            id: tab.id,
-            url: tab.url,
-            title: tab.title,
-          }))
-        }
-
-        if (enabledMcpServers.length) {
-          browserContext.enabledMcpServers = compact(enabledMcpServers)
-        }
-
-        if (customMcpServers.length) {
-          browserContext.customMcpServers = customMcpServers as {
-            name: string
-            url: string
-          }[]
-        }
+        const lastUserMessage = getLastUserMessageText(messages)
+        const action = textToActionRef.current.get(lastUserMessage)
+        const requestBrowserContext = buildRequestBrowserContext({
+          activeTab,
+          action,
+          enabledMcpServers,
+          customMcpServers,
+        })
 
         const declinedApps = await declinedAppsStorage.getValue()
-
         const supportsArrayConversation = await Capabilities.supports(
           Feature.PREVIOUS_CONVERSATION_ARRAY,
         )
@@ -317,46 +339,37 @@ export const useChatSession = (options?: ChatSessionOptions) => {
             : history.map((m) => `${m.role}: ${m.content}`).join('\n')
           : undefined
 
-        const result = {
-          api: `${agentUrlRef.current}/chat`,
-          body: {
-            message,
-            provider: provider?.type,
-            providerType: provider?.type,
-            providerName: provider?.name,
-            apiKey: provider?.apiKey,
-            baseUrl: provider?.baseUrl,
-            conversationId: conversationIdRef.current,
-            model: provider?.modelId ?? 'default',
-            mode: currentMode,
-            contextWindowSize: provider?.contextWindow,
-            temperature: provider?.temperature,
-            // Azure-specific
-            resourceName: provider?.resourceName,
-            // Bedrock-specific
-            accessKeyId: provider?.accessKeyId,
-            secretAccessKey: provider?.secretAccessKey,
-            region: provider?.region,
-            sessionToken: provider?.sessionToken,
-            // ChatGPT Pro (Codex)
-            reasoningEffort: provider?.reasoningEffort,
-            reasoningSummary: provider?.reasoningSummary,
-            browserContext,
-            origin: options?.origin ?? 'sidepanel',
-            userSystemPrompt: personalizationRef.current,
-            userWorkingDir: workingDirRef.current,
-            supportsImages: provider?.supportsImages,
-            previousConversation,
-            declinedApps: declinedApps.length > 0 ? declinedApps : undefined,
-            selectedText: activeTabSelection?.text,
-            selectedTextSource: activeTabSelection
-              ? {
-                  url: activeTabSelection.url,
-                  title: activeTabSelection.title,
-                }
-              : undefined,
-          },
+        const userSystemPrompt = getUserSystemPrompt(
+          options?.origin,
+          personalizationRef.current,
+        )
+
+        const commonRequest = {
+          conversationId: conversationIdRef.current,
+          mode: currentMode,
+          browserContext: requestBrowserContext,
+          userSystemPrompt,
+          userWorkingDir: workingDirRef.current,
+          previousConversation,
+          declinedApps,
         }
+
+        const message = getLastMessageText(messages)
+
+        const result = buildSidepanelPreparedSendMessagesRequest({
+          agentServerUrl: agentUrlRef.current ?? undefined,
+          target,
+          fallbackProvider,
+          message,
+          ...commonRequest,
+          selectedText: activeTabSelection?.text,
+          selectedTextSource: activeTabSelection
+            ? {
+                url: activeTabSelection.url,
+                title: activeTabSelection.title,
+              }
+            : undefined,
+        })
 
         // Track which tab's selection was sent so we can clear it on success
         pendingSelectionTabKeyRef.current =
@@ -365,6 +378,13 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         return result
       },
     }),
+    onFinish: async ({ message, isAbort, isError }) => {
+      await finishExecutionTask({
+        responseText: getLastMessageText([message]),
+        isAbort,
+        isError,
+      })
+    },
   })
 
   // Remove messages with empty parts (e.g. interrupted assistant responses)
@@ -442,7 +462,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   // Keep messagesRef in sync on every change (cheap ref assignment)
   useEffect(() => {
     messagesRef.current = messages
-  }, [messages])
+    syncExecutionHistory(messages, status)
+  }, [messages, status, syncExecutionHistory])
 
   // Save conversation only after streaming completes — not on every token
   const previousStatusRef = useRef(status)
@@ -492,6 +513,17 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     action?: ChatAction
   } | null>(null)
 
+  const dispatchMessage = useCallback(
+    (text: string) => {
+      startExecutionTask({
+        conversationId: conversationIdRef.current,
+        promptText: text,
+      })
+      baseSendMessage({ text })
+    },
+    [baseSendMessage, startExecutionTask],
+  )
+
   useEffect(() => {
     isIntegrationsSyncedRef.current = isIntegrationsSynced
   }, [isIntegrationsSynced])
@@ -509,15 +541,27 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           return next
         })
       }
-      baseSendMessage({ text: pending.text })
+      dispatchMessage(pending.text)
     }
-  }, [isIntegrationsSynced, baseSendMessage])
+  }, [dispatchMessage, isIntegrationsSynced])
 
   const sendMessage = (params: { text: string; action?: ChatAction }) => {
+    const target = selectedChatTargetRef.current
+    const llmTargetProvider = toLlmProviderConfig(target)
+    const agentTarget = target?.kind === 'acp' ? target : undefined
     track(MESSAGE_SENT_EVENT, {
       mode,
-      provider_type: selectedLlmProvider?.type,
-      model: selectedLlmProvider?.modelId,
+      provider_id:
+        agentTarget?.agentId ??
+        llmTargetProvider?.id ??
+        selectedLlmProvider?.id,
+      provider_type: agentTarget ? 'acp' : llmTargetProvider?.type,
+      agent_id: agentTarget?.agentId,
+      adapter: agentTarget?.adapter,
+      model:
+        agentTarget?.modelId ??
+        llmTargetProvider?.modelId ??
+        selectedLlmProvider?.modelId,
     })
 
     if (!isIntegrationsSyncedRef.current) {
@@ -534,7 +578,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         return next
       })
     }
-    baseSendMessage({ text: params.text })
+    dispatchMessage(params.text)
   }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: only need to run this once
@@ -560,14 +604,54 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     return () => unwatch()
   }, [])
 
+  const resetConversationState = () => {
+    stop()
+    void finishExecutionTask({ isAbort: true })
+    setConversationId(crypto.randomUUID())
+    setMessages([])
+    setTextToAction(new Map())
+    setLiked({})
+    setDisliked({})
+    setRestoredConversationId(null)
+    resetRemoteConversation()
+  }
+
   const handleSelectProvider = (provider: Provider) => {
-    const fullProvider = llmProviders.find((p) => p.id === provider.id)
+    const target = chatTargets.find(
+      (candidate) =>
+        candidate.id === provider.id && candidate.kind === provider.kind,
+    )
+    if (!target) return
+
+    const previousTarget = selectedChatTargetRef.current
     track(PROVIDER_SELECTED_EVENT, {
-      provider_id: provider.id,
-      provider_type: provider.type,
-      model_id: fullProvider?.modelId,
+      provider_id: target.id,
+      provider_type: target.kind === 'acp' ? 'acp' : target.type,
+      model_id:
+        target.kind === 'acp' ? target.modelId : target.provider.modelId,
+      agent_id: target.kind === 'acp' ? target.agentId : undefined,
+      adapter: target.kind === 'acp' ? target.adapter : undefined,
     })
-    setDefaultProvider(provider.id)
+
+    void selectChatTarget(target).catch((error) => {
+      sentry.captureException(error, {
+        extra: {
+          message: 'Failed to persist sidepanel chat target selection',
+          targetId: target.id,
+          targetKind: target.kind,
+        },
+      })
+    })
+    if (target.kind === 'llm') setDefaultProvider(target.provider.id)
+
+    if (
+      previousTarget &&
+      (previousTarget.kind !== target.kind ||
+        previousTarget.id !== target.id) &&
+      messagesRef.current.length > 0
+    ) {
+      resetConversationState()
+    }
   }
 
   const getActionForMessage = (message: UIMessage) => {
@@ -581,14 +665,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   const resetConversation = () => {
     track(CONVERSATION_RESET_EVENT, { message_count: messages.length })
-    stop()
-    setConversationId(crypto.randomUUID())
-    setMessages([])
-    setTextToAction(new Map())
-    setLiked({})
-    setDisliked({})
-    setRestoredConversationId(null)
-    resetRemoteConversation()
+    resetConversationState()
   }
 
   const isRestoringConversation =

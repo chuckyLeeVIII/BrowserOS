@@ -2,16 +2,14 @@
 export {
   type AgentConfig,
   AgentConfigSchema,
+  type ClaudeCodeAgentConfig,
+  ClaudeCodeAgentConfigSchema,
   type EvalConfig,
   EvalConfigSchema,
-  type GeminiComputerUseConfig,
-  GeminiComputerUseConfigSchema,
   type OrchestratorExecutorConfig,
   OrchestratorExecutorConfigSchema,
   type SingleAgentConfig,
   SingleAgentConfigSchema,
-  type YutoriNavigatorConfig,
-  YutoriNavigatorConfigSchema,
 } from './config'
 // Error types
 export {
@@ -51,8 +49,12 @@ export {
   AgentResultSchema,
   type GraderResult,
   GraderResultSchema,
+  type TaskDatasetMetadata,
+  TaskDatasetMetadataSchema,
   type TaskMetadata,
   TaskMetadataSchema,
+  type TokenUsage,
+  TokenUsageSchema,
 } from './result'
 // Task types
 export {

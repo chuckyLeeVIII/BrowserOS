@@ -1,6 +1,7 @@
 import type { FC } from 'react'
 import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router'
-
+import { Feature } from '@/lib/browseros/capabilities'
+import { useCapabilities } from '@/lib/browseros/useCapabilities'
 import { NewTab } from '../newtab/index/NewTab'
 import { NewTabChat } from '../newtab/index/NewTabChat'
 import { NewTabLayout } from '../newtab/layout/NewTabLayout'
@@ -9,9 +10,11 @@ import { OnboardingDemo } from '../onboarding/demo/OnboardingDemo'
 import { FeaturesPage } from '../onboarding/features/Features'
 import { Onboarding } from '../onboarding/index/Onboarding'
 import { StepsLayout } from '../onboarding/steps/StepsLayout'
+import { AgentCommandConversation } from './agent-command/AgentCommandConversation'
+import { AgentCommandHome } from './agent-command/AgentCommandHome'
+import { AgentCommandLayout } from './agent-command/agent-command-layout'
 import { AISettingsPage } from './ai-settings/AISettingsPage'
 import { ConnectMCP } from './connect-mcp/ConnectMCP'
-import { CreateGraphWrapper } from './create-graph/CreateGraphWrapper'
 import { CustomizationPage } from './customization/CustomizationPage'
 import { SurveyPage } from './jtbd-agent/SurveyPage'
 import { AuthLayout } from './layout/AuthLayout'
@@ -22,14 +25,9 @@ import { LoginPage } from './login/LoginPage'
 import { LogoutPage } from './login/LogoutPage'
 import { MagicLinkCallback } from './login/MagicLinkCallback'
 import { MCPSettingsPage } from './mcp-settings/MCPSettingsPage'
-import { MemoryPage } from './memory/MemoryPage'
 import { ProfilePage } from './profile/ProfilePage'
 import { ScheduledTasksPage } from './scheduled-tasks/ScheduledTasksPage'
-import { SearchProviderPage } from './search-provider/SearchProviderPage'
-import { SkillsPage } from './skills/SkillsPage'
-import { SoulPage } from './soul/SoulPage'
 import { UsagePage } from './usage/UsagePage'
-import { WorkflowsPageWrapper } from './workflows/WorkflowsPageWrapper'
 
 function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
   const params = new URLSearchParams(window.location.search)
@@ -37,6 +35,13 @@ function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
   const experimentId = params.get('experimentId') ?? 'default'
   const maxTurns = maxTurnsStr ? Number.parseInt(maxTurnsStr, 10) : 7
   return { maxTurns, experimentId }
+}
+
+// Agent management moved into AI & Agents settings; conversations live under
+// /home/agents. Keep old /agents links alive.
+const LegacyAgentRedirect: FC = () => {
+  const params = useParams()
+  return <Navigate to={`/home/agents/${params.agentId ?? ''}`} replace />
 }
 
 const OptionsRedirect: FC = () => {
@@ -49,13 +54,9 @@ const OptionsRedirect: FC = () => {
     'connect-mcp': '/connect-apps',
     mcp: '/settings/mcp',
     customization: '/settings/customization',
-    search: '/settings/search',
-    soul: '/home/soul',
-    skills: '/home/skills',
+    search: '/settings/ai',
     'jtbd-agent': '/settings/survey',
-    workflows: '/workflows',
     scheduled: '/scheduled',
-    'create-graph': '/workflows/create-graph',
   }
 
   const newPath = routeMap[path] || '/settings/ai'
@@ -64,6 +65,8 @@ const OptionsRedirect: FC = () => {
 
 export const App: FC = () => {
   const surveyParams = getSurveyParams()
+  const { supports } = useCapabilities()
+  const alphaEnabled = supports(Feature.ALPHA_FEATURES_SUPPORT)
 
   return (
     <HashRouter>
@@ -79,18 +82,29 @@ export const App: FC = () => {
         {/* Main app with sidebar */}
         <Route element={<SidebarLayout />}>
           {/* Home routes */}
-          <Route path="home" element={<NewTabLayout />}>
-            <Route index element={<NewTab />} />
-            <Route path="chat" element={<NewTabChat />} />
-            <Route path="personalize" element={<Personalize />} />
-            <Route path="soul" element={<SoulPage />} />
-            <Route path="skills" element={<SkillsPage />} />
-            <Route path="memory" element={<MemoryPage />} />
+          <Route
+            path="home"
+            element={<NewTabLayout useChatSessionOnHome={!alphaEnabled} />}
+          >
+            {alphaEnabled ? (
+              <>
+                <Route element={<AgentCommandLayout />}>
+                  <Route index element={<AgentCommandHome />} />
+                  <Route
+                    path="agents/:agentId"
+                    element={<AgentCommandConversation />}
+                  />
+                </Route>
+                <Route path="chat" element={<NewTabChat />} />
+                <Route path="personalize" element={<Personalize />} />
+              </>
+            ) : (
+              <Route index element={<NewTab />} />
+            )}
           </Route>
 
           {/* Primary nav routes */}
           <Route path="connect-apps" element={<ConnectMCP />} />
-          <Route path="workflows" element={<WorkflowsPageWrapper />} />
           <Route path="scheduled" element={<ScheduledTasksPage />} />
         </Route>
 
@@ -102,14 +116,15 @@ export const App: FC = () => {
             <Route path="chat" element={<LlmHubPage />} />
             <Route path="mcp" element={<MCPSettingsPage />} />
             <Route path="customization" element={<CustomizationPage />} />
-            <Route path="search" element={<SearchProviderPage />} />
+            <Route
+              path="search"
+              element={<Navigate to="/settings/ai" replace />}
+            />
             <Route path="survey" element={<SurveyPage {...surveyParams} />} />
             <Route path="usage" element={<UsagePage />} />
+            <Route path="*" element={<Navigate to="/settings/ai" replace />} />
           </Route>
         </Route>
-
-        {/* Full-screen without sidebar */}
-        <Route path="workflows/create-graph" element={<CreateGraphWrapper />} />
 
         {/* Onboarding routes - no sidebar, no auth required */}
         <Route path="onboarding">
@@ -123,20 +138,28 @@ export const App: FC = () => {
         <Route path="/" element={<Navigate to="/home" replace />} />
         <Route
           path="/personalize"
-          element={<Navigate to="/home/personalize" replace />}
+          element={
+            <Navigate
+              to={alphaEnabled ? '/home/personalize' : '/home'}
+              replace
+            />
+          }
         />
         <Route
           path="/settings/connect-mcp"
           element={<Navigate to="/connect-apps" replace />}
         />
+        <Route path="/audit" element={<Navigate to="/home" replace />} />
         <Route
-          path="/settings/soul"
-          element={<Navigate to="/home/soul" replace />}
+          path="/observability"
+          element={<Navigate to="/home" replace />}
         />
+        <Route path="/executions" element={<Navigate to="/home" replace />} />
         <Route
-          path="/settings/skills"
-          element={<Navigate to="/home/skills" replace />}
+          path="/agents"
+          element={<Navigate to="/settings/ai?section=claude" replace />}
         />
+        <Route path="/agents/:agentId" element={<LegacyAgentRedirect />} />
         <Route path="/options/*" element={<OptionsRedirect />} />
 
         {/* Fallback to home */}

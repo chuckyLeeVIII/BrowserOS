@@ -1,7 +1,49 @@
 {
   "resources": [
     {
-      "name": "Bun Runtime - macOS ARM64",
+      "name": "Lima limactl - macOS ARM64",
+      "source": {
+        "type": "r2",
+        "key": "third_party/lima/limactl-darwin-arm64"
+      },
+      "destination": "resources/bin/third_party/lima/bin/limactl",
+      "os": ["macos"],
+      "arch": ["arm64"],
+      "executable": true
+    },
+    {
+      "name": "Lima guest agent - Linux ARM64",
+      "source": {
+        "type": "r2",
+        "key": "third_party/lima/lima-guestagent.Linux-aarch64.gz"
+      },
+      "destination": "resources/bin/third_party/lima/share/lima/lima-guestagent.Linux-aarch64.gz",
+      "os": ["macos"],
+      "arch": ["arm64"]
+    },
+    {
+      "name": "Lima limactl - macOS x64",
+      "source": {
+        "type": "r2",
+        "key": "third_party/lima/limactl-darwin-x64"
+      },
+      "destination": "resources/bin/third_party/lima/bin/limactl",
+      "os": ["macos"],
+      "arch": ["x64"],
+      "executable": true
+    },
+    {
+      "name": "Lima guest agent - Linux x64",
+      "source": {
+        "type": "r2",
+        "key": "third_party/lima/lima-guestagent.Linux-x86_64.gz"
+      },
+      "destination": "resources/bin/third_party/lima/share/lima/lima-guestagent.Linux-x86_64.gz",
+      "os": ["macos"],
+      "arch": ["x64"]
+    },
+    {
+      "name": "Bun - macOS ARM64",
       "source": {
         "type": "r2",
         "key": "third_party/bun/bun-darwin-arm64"
@@ -12,7 +54,7 @@
       "executable": true
     },
     {
-      "name": "Bun Runtime - macOS x64",
+      "name": "Bun - macOS x64",
       "source": {
         "type": "r2",
         "key": "third_party/bun/bun-darwin-x64"
@@ -23,90 +65,25 @@
       "executable": true
     },
     {
-      "name": "Bun Runtime - Linux ARM64",
+      "name": "BrowserOS VM Lima template",
       "source": {
-        "type": "r2",
-        "key": "third_party/bun/bun-linux-arm64"
+        "type": "local",
+        "path": "packages/build-tools/template/browseros-vm.yaml"
       },
-      "destination": "resources/bin/third_party/bun",
-      "os": ["linux"],
-      "arch": ["arm64"],
-      "executable": true
-    },
-    {
-      "name": "Bun Runtime - Linux x64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/bun/bun-linux-x64"
-      },
-      "destination": "resources/bin/third_party/bun",
-      "os": ["linux"],
-      "arch": ["x64"],
-      "executable": true
-    },
-    {
-      "name": "Bun Runtime - Windows x64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/bun/bun-windows-x64.exe"
-      },
-      "destination": "resources/bin/third_party/bun.exe",
-      "os": ["windows"],
-      "arch": ["x64"]
-    },
-    {
-      "name": "ripgrep - macOS ARM64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/ripgrep/rg-darwin-arm64"
-      },
-      "destination": "resources/bin/third_party/rg",
+      "destination": "resources/vm/browseros-vm.yaml",
       "os": ["macos"],
-      "arch": ["arm64"],
-      "executable": true
+      "arch": ["arm64", "x64"]
     },
     {
-      "name": "ripgrep - macOS x64",
+      "name": "Drizzle migrations",
       "source": {
-        "type": "r2",
-        "key": "third_party/ripgrep/rg-darwin-x64"
+        "type": "local",
+        "path": "apps/server/src/lib/db/migrations"
       },
-      "destination": "resources/bin/third_party/rg",
+      "destination": "resources/db/migrations",
+      "recursive": true,
       "os": ["macos"],
-      "arch": ["x64"],
-      "executable": true
-    },
-    {
-      "name": "ripgrep - Linux ARM64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/ripgrep/rg-linux-arm64"
-      },
-      "destination": "resources/bin/third_party/rg",
-      "os": ["linux"],
-      "arch": ["arm64"],
-      "executable": true
-    },
-    {
-      "name": "ripgrep - Linux x64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/ripgrep/rg-linux-x64"
-      },
-      "destination": "resources/bin/third_party/rg",
-      "os": ["linux"],
-      "arch": ["x64"],
-      "executable": true
-    },
-    {
-      "name": "ripgrep - Windows x64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/ripgrep/rg-windows-x64.exe"
-      },
-      "destination": "resources/bin/third_party/rg.exe",
-      "os": ["windows"],
-      "arch": ["x64"]
+      "arch": ["arm64", "x64"]
     }
   ]
 }

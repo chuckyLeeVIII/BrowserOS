@@ -6,8 +6,10 @@
  * Use setup.ts:ensureBrowserOS() for the full test environment.
  */
 import type { ChildProcess } from 'node:child_process'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { rmSync } from 'node:fs'
+
+const TEST_USER_DATA_PREFIX = 'browseros-test-'
 
 export interface BrowserConfig {
   cdpPort: number
@@ -58,6 +60,16 @@ export function getBrowserState(): BrowserState | null {
   return browserState
 }
 
+function killOrphanedTestBrowsers(): void {
+  // Matches only BrowserOS processes launched with a test user-data-dir
+  // (e.g., /var/folders/.../browseros-test-XXXX). Never matches a dev
+  // BrowserOS run from ~/Library/Application Support/BrowserOS.
+  const result = spawnSync('pkill', ['-9', '-f', TEST_USER_DATA_PREFIX])
+  if (result.status === 0) {
+    console.log('Killed orphaned test browsers from a previous run')
+  }
+}
+
 export async function spawnBrowser(
   config: BrowserConfig,
 ): Promise<BrowserState> {
@@ -73,12 +85,20 @@ export async function spawnBrowser(
     await killBrowser()
   }
 
+  killOrphanedTestBrowsers()
+
   console.log(`Starting BrowserOS on CDP port ${config.cdpPort}...`)
   const browserProcess = spawn(
     config.binaryPath,
     [
+      '--no-first-run',
+      '--no-default-browser-check',
       '--use-mock-keychain',
       '--show-component-extension-options',
+      // Match the supported dev/eval launch path and keep legacy BrowserOS
+      // extensions from trying to talk to the removed controller bridge.
+      '--disable-browseros-extensions',
+      '--browseros-dock-icon=dev',
       '--enable-logging=stderr',
       ...(config.headless ? ['--headless=new'] : []),
       ...config.extraArgs,

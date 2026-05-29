@@ -1,4 +1,6 @@
 **/.DS_Store
+**.auctor/**
+.auctor.json
 .gcs_entries
 **/dmg
 **/env
@@ -23,9 +25,12 @@ nxtscape-cli-access.json
 gclient.json
 .env
 .grove/
+AGENTS.md
 **/resources/binaries/
 
 packages/browseros/build/tools/
 
 # AI SDK DevTools traces
 .devtools/
+.omc/
+.llm/

@@ -11,36 +11,37 @@
  */
 
 import { Hono } from 'hono'
+import { websocket } from 'hono/bun'
 import { cors } from 'hono/cors'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { HttpAgentError } from '../agent/errors'
 import { INLINED_ENV } from '../env'
+import { ensureHermesRuntimeReady } from '../lib/agents/runtime'
 import { KlavisClient } from '../lib/clients/klavis/klavis-client'
-import { initializeOAuth } from '../lib/clients/oauth'
+import { initializeOAuth, shutdownOAuth } from '../lib/clients/oauth'
 import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
+import { createAgentRoutes } from './routes/agents'
 import { createChatRoutes } from './routes/chat'
 import { createCreditsRoutes } from './routes/credits'
-import { createGraphRoutes } from './routes/graph'
 import { createHealthRoute } from './routes/health'
 import { createKlavisRoutes } from './routes/klavis'
 import { createMcpRoutes } from './routes/mcp'
-import { createMemoryRoutes } from './routes/memory'
+import { createMonitoringRoutes } from './routes/monitoring'
 import { createOAuthRoutes } from './routes/oauth'
 import { createProviderRoutes } from './routes/provider'
 import { createRefinePromptRoutes } from './routes/refine-prompt'
-import { createSdkRoutes } from './routes/sdk'
+import { createScreencastRoute } from './routes/screencast'
 import { createShutdownRoute } from './routes/shutdown'
-import { createSkillsRoutes } from './routes/skills'
-import { createSoulRoutes } from './routes/soul'
 import { createStatusRoute } from './routes/status'
 import {
-  connectKlavisProxy,
-  type KlavisProxyHandle,
+  connectKlavisInBackground,
+  type KlavisProxyRef,
 } from './services/klavis/strata-proxy'
 import type { Env, HttpServerConfig } from './types'
 import { defaultCorsConfig } from './utils/cors'
+import { requireTrustedAppOrigin } from './utils/request-auth'
 
 async function assertPortAvailable(port: number): Promise<void> {
   const net = await import('node:net')
@@ -78,29 +79,40 @@ export async function createHttpServer(config: HttpServerConfig) {
   } = config
 
   const { onShutdown } = config
-
-  // Initialize OAuth token manager (callback server binds lazily on first PKCE login)
   const tokenManager = browserosId
     ? initializeOAuth(getDb(), browserosId)
     : null
+  if (!browserosId) shutdownOAuth()
 
-  // Connect Klavis proxy (non-blocking: browser tools still work if this fails)
-  let klavisProxy: KlavisProxyHandle | null = null
-  if (browserosId) {
-    try {
-      klavisProxy = await connectKlavisProxy({
+  // Connect Klavis proxy in background with retry — browser tools available immediately
+  const klavisRef: KlavisProxyRef = { handle: null }
+  const stopKlavisBackground = browserosId
+    ? connectKlavisInBackground(klavisRef, {
         klavisClient: new KlavisClient(),
         browserosId,
       })
-    } catch (error) {
-      logger.warn(
-        'Failed to connect Klavis proxy, MCP will serve browser tools only',
-        {
-          error: error instanceof Error ? error.message : String(error),
+    : () => {}
+
+  const monitoringRoutes = new Hono<Env>()
+    .use('/*', requireTrustedAppOrigin())
+    .route('/', createMonitoringRoutes())
+
+  const agentRoutes = new Hono<Env>()
+    .use('/*', requireTrustedAppOrigin())
+    .route(
+      '/',
+      createAgentRoutes({
+        browserosServerPort: port,
+        resourcesDir,
+        browser,
+        ensureVmRuntimeReady: async (adapter) => {
+          switch (adapter) {
+            case 'hermes':
+              await ensureHermesRuntimeReady({ resourcesDir })
+          }
         },
-      )
-    }
-  }
+      }),
+    )
 
   const app = new Hono<Env>()
     .use('/*', cors(defaultCorsConfig))
@@ -109,8 +121,9 @@ export async function createHttpServer(config: HttpServerConfig) {
       '/shutdown',
       createShutdownRoute({
         onShutdown: () => {
-          tokenManager?.stopCallbackServer()
-          klavisProxy?.close().catch((err) =>
+          shutdownOAuth()
+          stopKlavisBackground()
+          klavisRef.handle?.close().catch((err) =>
             logger.warn('Failed to close Klavis proxy transport', {
               error: err instanceof Error ? err.message : String(err),
             }),
@@ -120,9 +133,7 @@ export async function createHttpServer(config: HttpServerConfig) {
       }),
     )
     .route('/status', createStatusRoute({ browser }))
-    .route('/soul', createSoulRoutes())
-    .route('/memory', createMemoryRoutes())
-    .route('/skills', createSkillsRoutes())
+    .route('/monitoring', monitoringRoutes)
     .route('/test-provider', createProviderRoutes({ browserosId }))
     .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
     .route(
@@ -151,7 +162,7 @@ export async function createHttpServer(config: HttpServerConfig) {
         browser,
         executionDir,
         resourcesDir,
-        klavisProxy,
+        klavisRef,
       }),
     )
     .route(
@@ -160,25 +171,12 @@ export async function createHttpServer(config: HttpServerConfig) {
         browser,
         registry,
         browserosId,
+        klavisRef,
         aiSdkDevtoolsEnabled: config.aiSdkDevtoolsEnabled,
       }),
     )
-    .route(
-      '/sdk',
-      createSdkRoutes({
-        port,
-        browser,
-        browserosId,
-      }),
-    )
-    .route(
-      '/graph',
-      createGraphRoutes({
-        port,
-        tempDir: executionDir,
-        codegenServiceUrl: config.codegenServiceUrl,
-      }),
-    )
+    .route('/screencast', createScreencastRoute({ browser }))
+    .route('/agents', agentRoutes)
 
   // Error handler
   app.onError((err, c) => {
@@ -225,6 +223,7 @@ export async function createHttpServer(config: HttpServerConfig) {
     port,
     hostname: host,
     idleTimeout: 0,
+    websocket,
   })
 
   logger.info('Consolidated HTTP Server started', { port, host })

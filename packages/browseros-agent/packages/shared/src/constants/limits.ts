@@ -80,3 +80,19 @@ export const CONTENT_LIMITS = {
   CONSOLE_DEFAULT_LIMIT: 50,
   CONSOLE_MAX_LIMIT: 200,
 } as const
+
+export const SCREENCAST_LIMITS = {
+  DEFAULT_JPEG_QUALITY: 80,
+  EVERY_NTH_FRAME: 1,
+  MAX_WIDTH: 1280,
+  MAX_HEIGHT: 800,
+  SUBSCRIBER_BACKPRESSURE_BYTES: 4 * 1024 * 1024,
+} as const
+
+export const AGENT_HARNESS_LIMITS = {
+  AGENT_NAME_MAX_CHARS: 80,
+  /** Maximum number of messages allowed in an agent's pending queue. */
+  QUEUE_MAX_LENGTH: 50,
+  /** Maximum size in bytes for a single queued message's text. */
+  QUEUE_MESSAGE_MAX_BYTES: 64 * 1024,
+} as const

@@ -4,11 +4,9 @@ import {
   Bot,
   Compass,
   CreditCard,
-  GitBranch,
   MessageSquare,
   Palette,
   RotateCcw,
-  Search,
   Server,
 } from 'lucide-react'
 import type { FC } from 'react'
@@ -61,13 +59,12 @@ const primarySettingsSections: NavSection[] = [
   {
     label: 'Provider Settings',
     items: [
-      { name: 'BrowserOS AI', to: '/settings/ai', icon: Bot },
+      { name: 'AI & Agents', to: '/settings/ai', icon: Bot },
       {
         name: 'Chat & Council Provider',
         to: '/settings/chat',
         icon: MessageSquare,
       },
-      { name: 'Search Provider', to: '/settings/search', icon: Search },
     ],
   },
   {
@@ -85,12 +82,6 @@ const primarySettingsSections: NavSection[] = [
         to: '/settings/usage',
         icon: CreditCard,
         feature: Feature.CREDITS_SUPPORT,
-      },
-      {
-        name: 'Workflows',
-        to: '/workflows',
-        icon: GitBranch,
-        feature: Feature.WORKFLOW_SUPPORT,
       },
     ],
   },

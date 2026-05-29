@@ -1,3 +1,4 @@
+import { env } from '../env'
 import { BrowserOSAdapter } from './adapter'
 
 const SERVER_VERSION_PREF = 'browseros.server.version'
@@ -7,16 +8,20 @@ type FeatureConfig = {
   maxBrowserOSVersion?: string
   minServerVersion?: string
   maxServerVersion?: string
+  requiresAlphaFlag?: boolean
 }
 
 /**
- * Features gated by BrowserOS version.
+ * Features gated by BrowserOS version or explicit environment flags.
  * Add new features here with corresponding config in FEATURE_CONFIG.
  *
- * Note: In development mode, all features are enabled regardless of version.
+ * Note: In development mode, all features are enabled regardless of version
+ * or alpha flag.
  * @public
  */
 export enum Feature {
+  // Unfinished UI surfaces behind an explicit alpha opt-in
+  ALPHA_FEATURES_SUPPORT = 'ALPHA_FEATURES_SUPPORT',
   // support for OpenAI-compatible provider
   OPENAI_COMPATIBLE_SUPPORT = 'OPENAI_COMPATIBLE_SUPPORT',
   // Managed MCP servers integration
@@ -31,20 +36,12 @@ export enum Feature {
   WORKSPACE_FOLDER_SUPPORT = 'WORKSPACE_FOLDER_SUPPORT',
   // Proxy server support
   PROXY_SUPPORT = 'PROXY_SUPPORT',
-  // Workflows feature
-  WORKFLOW_SUPPORT = 'WORKFLOW_SUPPORT',
   // previousConversation as structured array (older servers only accept string)
   PREVIOUS_CONVERSATION_ARRAY = 'PREVIOUS_CONVERSATION_ARRAY',
-  // Soul page: agent personality viewer and editor
-  SOUL_SUPPORT = 'SOUL_SUPPORT',
   // Inline chat in the new tab page
   NEWTAB_CHAT_SUPPORT = 'NEWTAB_CHAT_SUPPORT',
   // Vertical tabs preference and customization
   VERTICAL_TABS_SUPPORT = 'VERTICAL_TABS_SUPPORT',
-  // Memory page: core memory viewer and editor
-  MEMORY_SUPPORT = 'MEMORY_SUPPORT',
-  // Skills page: agent skills viewer and editor
-  SKILLS_SUPPORT = 'SKILLS_SUPPORT',
   // ChatGPT Pro OAuth LLM provider
   CHATGPT_PRO_SUPPORT = 'CHATGPT_PRO_SUPPORT',
   // GitHub Copilot OAuth LLM provider
@@ -53,6 +50,8 @@ export enum Feature {
   QWEN_CODE_SUPPORT = 'QWEN_CODE_SUPPORT',
   // Credit-based usage tracking
   CREDITS_SUPPORT = 'CREDITS_SUPPORT',
+  // Claude Code / Codex agent-harness adapters in the unified picker + settings
+  AGENT_HARNESS_SUPPORT = 'AGENT_HARNESS_SUPPORT',
 }
 
 /**
@@ -63,27 +62,26 @@ export enum Feature {
  * - maxServerVersion: feature enabled when server < this version (for deprecation)
  *
  * TypeScript enforces that every Feature has a config entry.
- * Note: In development mode, all features are enabled regardless of version.
+ * In development mode, all features are enabled regardless of version or
+ * alpha flag.
  */
 const FEATURE_CONFIG: { [K in Feature]: FeatureConfig } = {
+  [Feature.ALPHA_FEATURES_SUPPORT]: { requiresAlphaFlag: true },
   [Feature.OPENAI_COMPATIBLE_SUPPORT]: { minBrowserOSVersion: '0.33.0.1' },
   [Feature.MANAGED_MCP_SUPPORT]: { minBrowserOSVersion: '0.34.0.0' },
   [Feature.PERSONALIZATION_SUPPORT]: { minBrowserOSVersion: '0.36.1.0' },
   [Feature.UNIFIED_PORT_SUPPORT]: { minBrowserOSVersion: '0.36.1.0' },
   [Feature.CUSTOMIZATION_SUPPORT]: { minBrowserOSVersion: '0.36.1.0' },
   [Feature.WORKSPACE_FOLDER_SUPPORT]: { minBrowserOSVersion: '0.36.4.0' },
-  [Feature.PROXY_SUPPORT]: { minBrowserOSVersion: '0.39.0.1' },
-  [Feature.WORKFLOW_SUPPORT]: { minServerVersion: '0.0.41' },
+  [Feature.PROXY_SUPPORT]: { minBrowserOSVersion: '0.46.0.0' },
   [Feature.PREVIOUS_CONVERSATION_ARRAY]: { minServerVersion: '0.0.64' },
-  [Feature.SOUL_SUPPORT]: { minServerVersion: '0.0.67' },
   [Feature.NEWTAB_CHAT_SUPPORT]: { minBrowserOSVersion: '0.40.0.0' },
   [Feature.VERTICAL_TABS_SUPPORT]: { minBrowserOSVersion: '0.42.0.0' },
-  [Feature.MEMORY_SUPPORT]: { minServerVersion: '0.0.73' },
-  [Feature.SKILLS_SUPPORT]: { minBrowserOSVersion: '0.43.0.0' },
   [Feature.CHATGPT_PRO_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.GITHUB_COPILOT_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.QWEN_CODE_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.CREDITS_SUPPORT]: { minServerVersion: '0.0.78' },
+  [Feature.AGENT_HARNESS_SUPPORT]: { minBrowserOSVersion: '0.46.0.0' },
 }
 
 function parseVersion(version: string): number[] {
@@ -124,12 +122,40 @@ function checkVersionConstraints(
   return true
 }
 
+export function resolveStaticFeatureSupport({
+  isDevelopment,
+  alphaFeaturesEnabled,
+  requiresAlphaFlag = false,
+}: {
+  isDevelopment: boolean
+  alphaFeaturesEnabled: boolean
+  requiresAlphaFlag?: boolean
+}): boolean | null {
+  if (isDevelopment) {
+    return true
+  }
+  if (requiresAlphaFlag) {
+    return alphaFeaturesEnabled
+  }
+  return null
+}
+
 type CapabilitiesState = {
   browserOSVersion: number[] | null
   serverVersion: number[] | null
 }
 
 let initPromise: Promise<CapabilitiesState> | null = null
+
+function getStaticFeatureSupport(feature: Feature): boolean | null {
+  const config = FEATURE_CONFIG[feature]
+  if (!config) return false
+  return resolveStaticFeatureSupport({
+    isDevelopment: import.meta.env.DEV,
+    alphaFeaturesEnabled: env.VITE_ALPHA_FEATURES,
+    requiresAlphaFlag: config.requiresAlphaFlag,
+  })
+}
 
 async function doInitialize(): Promise<CapabilitiesState> {
   const adapter = BrowserOSAdapter.getInstance()
@@ -166,7 +192,9 @@ function ensureInitialized(): Promise<CapabilitiesState> {
   return initPromise
 }
 
-function checkFeatureSupport(
+// Exported for unit tests: resolves a feature's version gate directly,
+// bypassing the dev-mode/static short-circuit in `supports`.
+export function checkFeatureSupport(
   state: CapabilitiesState,
   feature: Feature,
 ): boolean {
@@ -208,12 +236,17 @@ function checkFeatureSupport(
  * @public
  */
 export const Capabilities = {
+  getStaticSupport(feature: Feature): boolean | null {
+    return getStaticFeatureSupport(feature)
+  },
+
   /**
    * Check if a feature is supported.
    * In development mode, all features are enabled.
    */
   async supports(feature: Feature): Promise<boolean> {
-    if (import.meta.env.DEV) return true
+    const staticSupport = getStaticFeatureSupport(feature)
+    if (staticSupport !== null) return staticSupport
     const state = await ensureInitialized()
     return checkFeatureSupport(state, feature)
   },

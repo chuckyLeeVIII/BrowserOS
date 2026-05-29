@@ -1,12 +1,4 @@
-import {
-  Brain,
-  CalendarClock,
-  Home,
-  PlugZap,
-  Settings,
-  Sparkles,
-  Wand2,
-} from 'lucide-react'
+import { CalendarClock, Home, PlugZap, Settings } from 'lucide-react'
 import type { FC } from 'react'
 import { NavLink, useLocation } from 'react-router'
 import {
@@ -40,25 +32,19 @@ const primaryNavItems: NavItem[] = [
   },
   { name: 'Scheduled Tasks', to: '/scheduled', icon: CalendarClock },
   {
-    name: 'Skills',
-    to: '/home/skills',
-    icon: Wand2,
-    feature: Feature.SKILLS_SUPPORT,
+    name: 'Settings',
+    to: '/settings/ai',
+    icon: Settings,
   },
-  {
-    name: 'Memory',
-    to: '/home/memory',
-    icon: Brain,
-    feature: Feature.MEMORY_SUPPORT,
-  },
-  {
-    name: 'Soul',
-    to: '/home/soul',
-    icon: Sparkles,
-    feature: Feature.SOUL_SUPPORT,
-  },
-  { name: 'Settings', to: '/settings/ai', icon: Settings },
 ]
+
+function isNavItemActive(item: NavItem, pathname: string): boolean {
+  if (item.to === '/settings/ai') {
+    return pathname.startsWith('/settings')
+  }
+
+  return pathname === item.to
+}
 
 export const SidebarNavigation: FC<SidebarNavigationProps> = ({
   expanded = true,
@@ -76,10 +62,7 @@ export const SidebarNavigation: FC<SidebarNavigationProps> = ({
         <nav className="space-y-1">
           {filteredItems.map((item) => {
             const Icon = item.icon
-            const isActive =
-              item.to === '/settings/ai'
-                ? location.pathname.startsWith('/settings')
-                : location.pathname === item.to
+            const isActive = isNavItemActive(item, location.pathname)
 
             const navItem = (
               <NavLink

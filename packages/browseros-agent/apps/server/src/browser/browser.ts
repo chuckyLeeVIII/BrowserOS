@@ -61,6 +61,12 @@ export interface WindowInfo {
   activeTabId?: number
 }
 
+export interface SetWindowVisibilityResult {
+  window: WindowInfo
+  replaced: boolean
+  previousWindowId: number
+}
+
 interface TabInfo {
   tabId: number
   targetId: string
@@ -160,6 +166,63 @@ export class Browser {
     return sessionId
   }
 
+  async getActivePageForWindow(windowId: number): Promise<{
+    targetId: string
+    session: ProtocolApi
+    url: string
+  }> {
+    const result = await this.cdp.Browser.getActiveTab({ windowId })
+    const tab = result.tab
+    if (!tab) {
+      throw new Error(`No active tab in window ${windowId}`)
+    }
+    const pageId = await this.ensurePageIdForTarget(tab.targetId)
+    const sessionId = await this.attachToPage(tab.targetId, pageId)
+    return {
+      targetId: tab.targetId,
+      session: this.cdp.session(sessionId),
+      url: tab.url,
+    }
+  }
+
+  /** Resolve a Browser-internal pageId to a CDP session bound to its tab. */
+  async getPageSession(pageId: number): Promise<{
+    targetId: string
+    session: ProtocolApi
+    url: string
+  }> {
+    let info = this.pages.get(pageId)
+    if (!info) {
+      await this.listPages()
+      info = this.pages.get(pageId)
+    }
+    if (!info) {
+      throw new Error(`Unknown page ${pageId}`)
+    }
+    const sessionId = await this.attachToPage(info.targetId, pageId)
+    return {
+      targetId: info.targetId,
+      session: this.cdp.session(sessionId),
+      url: info.url,
+    }
+  }
+
+  // Routes screencast attaches through the same attachToPage path agent
+  // tools use, so the session is registered with consoleCollector + the
+  // full domain enables. Without this, a screencast-first tab would
+  // cache a Page.enable-only session and later agent tool calls would
+  // short-circuit on the cached entry — silently dropping console logs.
+  private async ensurePageIdForTarget(targetId: string): Promise<number> {
+    for (const [pageId, info] of this.pages) {
+      if (info.targetId === targetId) return pageId
+    }
+    await this.listPages()
+    for (const [pageId, info] of this.pages) {
+      if (info.targetId === targetId) return pageId
+    }
+    throw new Error(`Could not resolve pageId for target ${targetId}`)
+  }
+
   // --- Pages ---
 
   async listPages(): Promise<PageInfo[]> {
@@ -184,7 +247,11 @@ export class Browser {
           info.loadProgress = tab.loadProgress
           info.isPinned = tab.isPinned
           info.isHidden = tab.isHidden
-          info.windowId = tab.windowId
+          // CDP omits windowId for hidden tabs, so preserve the
+          // value we cached when the tab was created via newPage —
+          // otherwise downstream filters (e.g. the tab picker
+          // scoped to a thread's hidden window) lose every entry.
+          info.windowId = tab.windowId ?? info.windowId
           info.index = tab.index
           info.groupId = tab.groupId
           found = true
@@ -226,6 +293,52 @@ export class Browser {
     return this.pages.get(pageId)?.tabId
   }
 
+  getPageInfo(pageId: number): PageInfo | undefined {
+    return this.pages.get(pageId)
+  }
+
+  async refreshPageInfo(pageId: number): Promise<PageInfo | undefined> {
+    let info = this.pages.get(pageId)
+    if (!info) {
+      await this.listPages()
+      info = this.pages.get(pageId)
+    }
+    if (!info) return undefined
+
+    try {
+      const result = await this.cdp.Browser.getTabInfo({ tabId: info.tabId })
+      const tab = result.tab as TabInfo
+      const updated: PageInfo = {
+        ...info,
+        targetId: tab.targetId,
+        tabId: tab.tabId,
+        url: tab.url,
+        title: tab.title,
+        isActive: tab.isActive,
+        isLoading: tab.isLoading,
+        loadProgress: tab.loadProgress,
+        isPinned: tab.isPinned,
+        isHidden: tab.isHidden,
+        windowId: tab.windowId,
+        index: tab.index,
+        groupId: tab.groupId,
+      }
+      this.pages.set(pageId, updated)
+      return updated
+    } catch {
+      await this.listPages()
+      return this.pages.get(pageId)
+    }
+  }
+
+  async getSession(pageId: number): Promise<ProtocolApi | null> {
+    const info = this.pages.get(pageId)
+    if (!info) return null
+    const sessionId = this.sessions.get(info.targetId)
+    if (!sessionId) return null
+    return this.cdp.session(sessionId)
+  }
+
   async resolveTabIds(tabIds: number[]): Promise<Map<number, number>> {
     await this.listPages()
     const tabToPage = new Map<number, number>()
@@ -251,15 +364,45 @@ export class Browser {
     return null
   }
 
+  private async resolveWindowIdForNewPage(opts?: {
+    hidden?: boolean
+    windowId?: number
+  }): Promise<number | undefined> {
+    if (!opts?.hidden) {
+      return opts?.windowId
+    }
+
+    if (opts.windowId !== undefined) {
+      const windows = await this.listWindows()
+      const targetWindow = windows.find(
+        (window) => window.windowId === opts.windowId,
+      )
+      if (targetWindow && !targetWindow.isVisible) {
+        return targetWindow.windowId
+      }
+      if (targetWindow?.isVisible) {
+        logger.warn(
+          'Requested hidden page target window is visible, creating a new hidden window instead',
+          {
+            requestedWindowId: opts.windowId,
+          },
+        )
+      }
+    }
+
+    const hiddenWindow = await this.createWindow({ hidden: true })
+    return hiddenWindow.windowId
+  }
+
   async newPage(
     url: string,
     opts?: { hidden?: boolean; background?: boolean; windowId?: number },
   ): Promise<number> {
+    const windowId = await this.resolveWindowIdForNewPage(opts)
     const createResult = await this.cdp.Browser.createTab({
       url,
-      ...(opts?.hidden !== undefined && { hidden: opts.hidden }),
       ...(opts?.background !== undefined && { background: opts.background }),
-      ...(opts?.windowId !== undefined && { windowId: opts.windowId }),
+      ...(windowId !== undefined && { windowId }),
     })
 
     const tabId = (createResult.tab as TabInfo).tabId
@@ -287,7 +430,7 @@ export class Browser {
       loadProgress: tabInfo.loadProgress,
       isPinned: tabInfo.isPinned,
       isHidden: tabInfo.isHidden,
-      windowId: tabInfo.windowId,
+      windowId: tabInfo.windowId ?? windowId,
       index: tabInfo.index,
       groupId: tabInfo.groupId,
     })
@@ -392,9 +535,48 @@ export class Browser {
 
   // --- Observation ---
 
+  private async getFrameIds(session: ProtocolApi): Promise<string[]> {
+    try {
+      const result = await session.Page.getFrameTree()
+      const ids: string[] = []
+      type Tree = { frame: { id: string }; childFrames?: Tree[] }
+      function collect(tree: Tree) {
+        ids.push(tree.frame.id)
+        if (tree.childFrames)
+          for (const child of tree.childFrames) collect(child)
+      }
+      collect(result.frameTree as Tree)
+      return ids
+    } catch {
+      return []
+    }
+  }
+
   private async fetchAXTree(session: ProtocolApi): Promise<AXNode[]> {
-    const result = await session.Accessibility.getFullAXTree()
-    return (result.nodes as AXNode[]) ?? []
+    const frameIds = await this.getFrameIds(session)
+
+    if (frameIds.length <= 1) {
+      const result = await session.Accessibility.getFullAXTree()
+      return (result.nodes as AXNode[]) ?? []
+    }
+
+    const allNodes: AXNode[] = []
+    for (const frameId of frameIds) {
+      try {
+        const result = await session.Accessibility.getFullAXTree({ frameId })
+        const nodes = (result.nodes as AXNode[]) ?? []
+        for (const node of nodes) {
+          allNodes.push({
+            ...node,
+            nodeId: `${frameId}:${node.nodeId}`,
+            childIds: node.childIds?.map((id) => `${frameId}:${id}`),
+          })
+        }
+      } catch {
+        // Cross-origin or detached frames may fail — skip
+      }
+    }
+    return allNodes
   }
 
   async snapshot(page: number): Promise<string> {
@@ -1122,6 +1304,26 @@ export class Browser {
 
   async activateWindow(windowId: number): Promise<void> {
     await this.cdp.Browser.activateWindow({ windowId })
+  }
+
+  /**
+   * Changes a window between hidden and visible states.
+   * BrowserOS may replace the underlying window, so callers must use the returned window ID.
+   */
+  async setWindowVisibility(
+    windowId: number,
+    opts: { visible: boolean; activate?: boolean },
+  ): Promise<SetWindowVisibilityResult> {
+    const result = await this.cdp.Browser.setWindowVisibility({
+      windowId,
+      visible: opts.visible,
+      ...(opts.activate !== undefined && { activate: opts.activate }),
+    })
+    return {
+      window: result.window as WindowInfo,
+      replaced: result.replaced,
+      previousWindowId: result.previousWindowId,
+    }
   }
 
   async showPage(

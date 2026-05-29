@@ -7,9 +7,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { SetLevelRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { Browser } from '../../../browser/browser'
+import type { ToolExecutionObserver } from '../../../monitoring/observer'
 import type { ToolRegistry } from '../../../tools/tool-registry'
 import {
-  type KlavisProxyHandle,
+  type KlavisProxyRef,
   registerKlavisTools,
 } from '../klavis/strata-proxy'
 import { MCP_INSTRUCTIONS } from './mcp-prompt'
@@ -21,7 +22,15 @@ export interface McpServiceDeps {
   browser: Browser
   executionDir: string
   resourcesDir: string
-  klavisProxy?: KlavisProxyHandle | null
+  klavisRef?: KlavisProxyRef
+  observer?: ToolExecutionObserver
+  // Per-request default windowId from the X-BrowserOS-Default-Window-Id
+  // header. When set, tool handlers inject this into args.windowId for
+  // any tool whose zod input schema has a `windowId` field and whose
+  // caller-supplied args didn't include one. Lets a host application
+  // bind every browser tool call to a specific window without the
+  // agent needing to be aware of it.
+  defaultWindowId?: number
 }
 
 export function createMcpServer(deps: McpServiceDeps): McpServer {
@@ -45,11 +54,13 @@ export function createMcpServer(deps: McpServiceDeps): McpServer {
       workingDir: deps.executionDir,
       resourcesDir: deps.resourcesDir,
     },
+    observer: deps.observer,
+    defaultWindowId: deps.defaultWindowId,
   })
 
-  // Register Klavis proxy tools (if connected)
-  if (deps.klavisProxy) {
-    registerKlavisTools(server, deps.klavisProxy)
+  // Register Klavis proxy tools (if connected via background init)
+  if (deps.klavisRef?.handle) {
+    registerKlavisTools(server, deps.klavisRef.handle, deps.observer)
   }
 
   return server

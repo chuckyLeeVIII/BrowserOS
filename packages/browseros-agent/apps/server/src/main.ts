@@ -8,7 +8,6 @@
  * Manages server lifecycle: initialization, startup, and shutdown.
  */
 
-import type { Database } from 'bun:sqlite'
 import fs from 'node:fs'
 import path from 'node:path'
 import { EXIT_CODES } from '@browseros/shared/constants/exit-codes'
@@ -18,8 +17,14 @@ import { Browser } from './browser/browser'
 import type { ServerConfig } from './config'
 import { INLINED_ENV } from './env'
 import {
+  configureClaudeRuntime,
+  configureCodexRuntime,
+  getHermesRuntime,
+} from './lib/agents/runtime'
+import {
   cleanOldSessions,
   ensureBrowserosDir,
+  getDbPath,
   removeServerConfigSync,
   writeServerConfig,
 } from './lib/browseros-dir'
@@ -29,19 +34,11 @@ import { logger } from './lib/logger'
 import { metrics } from './lib/metrics'
 import { isPortInUseError } from './lib/port-binding'
 import { Sentry } from './lib/sentry'
-import { seedSoulTemplate } from './lib/soul'
-import { migrateBuiltinSkills } from './skills/migrate'
-import {
-  startSkillSync,
-  stopSkillSync,
-  syncBuiltinSkills,
-} from './skills/remote-sync'
 import { registry } from './tools/registry'
 import { VERSION } from './version'
 
 export class Application {
   private config: ServerConfig
-  private db: Database | null = null
 
   constructor(config: ServerConfig) {
     this.config = config
@@ -54,6 +51,8 @@ export class Application {
       resourcesDir: path.resolve(this.config.resourcesDir),
     })
 
+    configureClaudeRuntime()
+    configureCodexRuntime()
     await this.initCoreServices()
 
     if (!this.config.cdpPort) {
@@ -96,6 +95,7 @@ export class Application {
     try {
       await writeServerConfig({
         server_port: this.config.serverPort,
+        cdp_port: this.config.cdpPort ?? undefined,
         url: `http://127.0.0.1:${this.config.serverPort}`,
         server_version: VERSION,
         browseros_version: this.config.instanceBrowserosVersion,
@@ -116,14 +116,15 @@ export class Application {
     )
 
     this.logStartupSummary()
-    startSkillSync()
 
     metrics.log('http_server.started', { version: VERSION })
   }
 
   stop(reason?: string): void {
     logger.info('Shutting down server...', { reason })
-    stopSkillSync()
+    getHermesRuntime()
+      ?.executeAction({ type: 'stop' })
+      .catch(() => {})
     removeServerConfigSync()
 
     // Immediate exit without graceful shutdown. Chromium may kill us on update/restart,
@@ -141,19 +142,19 @@ export class Application {
     this.configureLogDirectory()
     await ensureBrowserosDir()
     await cleanOldSessions()
-    await seedSoulTemplate()
-    await migrateBuiltinSkills()
-    await syncBuiltinSkills()
 
-    const dbPath = path.join(
-      this.config.executionDir || this.config.resourcesDir,
-      'browseros.db',
-    )
-    this.db = initializeDb(dbPath)
+    initializeDb({
+      dbPath: getDbPath(),
+      resourcesDir: this.config.resourcesDir,
+    })
 
     identity.initialize({
       installId: this.config.instanceInstallId,
-      db: this.db,
+      statePath: path.join(
+        this.config.executionDir,
+        'identity',
+        'browseros-id.json',
+      ),
     })
 
     const browserosId = identity.getBrowserOSId()
